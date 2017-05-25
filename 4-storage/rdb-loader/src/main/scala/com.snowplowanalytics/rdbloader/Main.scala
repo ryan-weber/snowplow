@@ -42,17 +42,24 @@ object Main {
   implicit val skippableStepRead =
     Read.reads { (Utils.fromString[SkippableStep](_)).andThen(_.right.get) }
 
-  sealed trait OptionalWorkStep extends StringEnum
+  sealed trait Step extends StringEnum
+
+  sealed trait OptionalWorkStep extends Step
   case object Compupdate extends OptionalWorkStep { def asString = "compupdate" }
   case object Vacuum extends OptionalWorkStep { def asString = "vacuum" }
 
-  sealed trait SkippableStep extends StringEnum
+  sealed trait SkippableStep extends Step with StringEnum
   case object ArchiveEnriched extends SkippableStep { def asString = "archive_enriched" }
   case object Download extends SkippableStep { def asString = "download" }
   case object Analyze extends SkippableStep { def asString = "analyze" }
   case object Delete extends SkippableStep { def asString = "delete" }
   case object Shred extends SkippableStep { def asString = "shred" }
   case object Load extends SkippableStep { def asString = "load" }
+
+  def constructSteps(toSkip: Set[SkippableStep], toInclude: Set[OptionalWorkStep]): Set[Step] = {
+    val allSkippable = Utils.sealedDescendants[SkippableStep]
+    allSkippable -- toSkip ++ toInclude
+  }
 
   // TODO: this probably should contain base64-encoded strings instead of `File`
   case class CliConfig(
@@ -69,8 +76,7 @@ object Main {
     configYaml: Config,
     b64config: Boolean,     // TODO: Why is it in AppConfig
     targets: Set[Targets.StorageTarget],
-    include: List[OptionalWorkStep],
-    skip: List[SkippableStep]) // Contains parsed configs
+    steps: Set[Step]) // Contains parsed configs
 
   def loadResolver(resolverConfig: File): ValidatedNel[ConfigError, Resolver] = {
     if (!resolverConfig.isFile) ParseError(s"[${resolverConfig.getAbsolutePath}] is not a file").invalidNel
@@ -87,7 +93,9 @@ object Main {
     val config: ValidatedNel[ConfigError, Config] = Config.loadFromFile(cliConfig.config).toValidatedNel
 
     (targets |@| config).map {
-      case (t, c) => AppConfig(c, cliConfig.b64config, t.toSet, cliConfig.include.toList, cliConfig.skip.toList)
+      case (t, c) =>
+        val steps = constructSteps(cliConfig.skip.toSet, cliConfig.include.toSet)
+        AppConfig(c, cliConfig.b64config, t.toSet, steps)
     }
   }
 
@@ -128,7 +136,7 @@ object Main {
     case postgresqlTarget: PostgresqlConfig =>
       val downloadFolder = config.configYaml.storage.download.folder.getOrElse("") // TODO: get default dir
       val monitoring = config.configYaml.monitoring.snowplow == null               // TODO: handle monitoring
-      loaders.PostgresqlLoader.loadEvents(downloadFolder, postgresqlTarget, config.include.toSet, config.skip.toSet, monitoring)
+      loaders.PostgresqlLoader.loadEvents(downloadFolder, postgresqlTarget, config.steps, monitoring)
     case redshiftTarget: RedshiftConfig =>
       ???
     case _ =>

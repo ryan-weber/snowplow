@@ -19,14 +19,12 @@ import cats.syntax.traverse._
 import cats.instances.list._
 import cats.syntax.either._
 import cats.syntax.validated._
-
 import io.circe.Json
 import io.circe.Decoder._
 import io.circe.generic.auto._
-
 import org.json4s.JValue
-
 import com.github.fge.jsonschema.core.report.ProcessingMessage
+import com.snowplowanalytics.rdbloader.loaders.Common
 
 // Iglu client
 import com.snowplowanalytics.iglu.core.SchemaKey
@@ -90,7 +88,7 @@ object Targets {
       schema: String,
       username: String,
       password: String)
-    extends StorageTarget {
+    extends StorageTarget with JdbcConfig {
     val purpose = EnrichedEvents
   }
 
@@ -105,9 +103,27 @@ object Targets {
       password: String,
       maxError: Int,
       compRows: Long)
-    extends StorageTarget {
+    extends StorageTarget with JdbcConfig {
     val purpose = EnrichedEvents
   }
+
+  /**
+   * Common configuration for JDBC target, such as Redshift and Postgres
+   * Any of those can be safely coerced
+   */
+  trait JdbcConfig {
+    def name: String
+    def host: String
+    def database: String
+    def schema: String
+    def port: Int
+    def sslMode: SslMode
+    def username: String
+    def password: String
+
+    def getTableName = Common.getTable(schema)
+  }
+
 
   /**
     * Read all JSONs in directory, validate via Iglu as available storage targets

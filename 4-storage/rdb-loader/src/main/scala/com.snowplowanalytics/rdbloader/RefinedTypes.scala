@@ -19,7 +19,7 @@ import cats.syntax.either._
 import io.circe.Decoder
 
 /**
-  * Module with auxiliary types to add type-safety into configuration parsing
+  * Module with auxiliary paths to add type-safety into configuration parsing
   */
 object RefinedTypes {
 
@@ -28,6 +28,7 @@ object RefinedTypes {
   /**
     * Refined type for AWS S3 bucket, allowing only valid S3 paths
     */
+  // TODO: rename to S3Folder
   type S3Bucket = String @@ S3BucketTag
 
   object S3Bucket extends tag.Tagger[S3BucketTag] {
@@ -35,14 +36,28 @@ object RefinedTypes {
       if (s.endsWith("/")) s
       else s + "/"
 
+    // TODO: s3n, s3a
     def parse(s: String): Either[String, S3Bucket] = s match {
       case _ if !s.startsWith("s3://") => "Bucket name must start with s3://".asLeft
       case _ if s.length > 1024        => "Key length cannot be more than 1024 symbols".asLeft
       case _                           => apply(appendTrailingSlash(s)).asRight
     }
+
+    def unsafeCoerce(s: String): S3Bucket =
+      apply(appendTrailingSlash(s).asInstanceOf[S3Bucket])
   }
 
   implicit val bucketDecoder =
     Decoder.decodeString.emap(S3Bucket.parse)
+
+
+  // TODO: probably can be CopyStatementTag
+  sealed trait SqlStringTag
+
+  type SqlString = String @@ SqlStringTag
+
+  object SqlString extends tag.Tagger[SqlStringTag] {
+    def unsafeCoerce(s: String) = apply(s)
+  }
 
 }

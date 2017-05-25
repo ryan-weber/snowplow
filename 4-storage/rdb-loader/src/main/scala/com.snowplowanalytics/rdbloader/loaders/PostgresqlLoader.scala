@@ -13,25 +13,25 @@
 package com.snowplowanalytics.rdbloader
 package loaders
 
-import java.util.Properties
 import java.io.FileReader
-import java.sql.{SQLException, SQLTimeoutException}
 import java.nio.file._
+import java.sql.{SQLException, SQLTimeoutException}
+import java.util.Properties
 
 import scala.annotation.tailrec
 import scala.collection.convert.wrapAsScala._
 
-import cats.Semigroup
+import cats.syntax.all._
 import cats.instances.all._
-import cats.syntax.semigroup._
-import cats.syntax.either._
 
 import org.postgresql.Driver
 import org.postgresql.jdbc.PgConnection
 import org.postgresql.copy.CopyManager
 
-import Targets.PostgresqlConfig
-import Main.{Analyze, OptionalWorkStep, SkippableStep, Vacuum}
+import Targets.{JdbcConfig, PostgresqlConfig}
+import Main.{Analyze, Step, Vacuum}
+import RefinedTypes.SqlString
+
 
 object PostgresqlLoader {
 
@@ -52,8 +52,7 @@ object PostgresqlLoader {
     */
   def loadEvents(folder: String,
                  target: PostgresqlConfig,
-                 skipSteps: Set[OptionalWorkStep],
-                 skippableStep: Set[SkippableStep],
+                 steps: Set[Step],
                  tracking: Boolean): Unit = {
     val eventFiles = getEventFiles(Paths.get(folder))
     val copyResult = copyViaStdin(target, eventFiles)
@@ -63,36 +62,53 @@ object PostgresqlLoader {
         Monitoring.trackLoadFailed(error)
       case Right(_) =>
         Monitoring.trackLoadSucceeded()
-        getPostprocessingStatement(target, skipSteps, skippableStep) match {
+        getPostprocessingStatement(target, steps) match {
           case Some(statement) =>
             // TODO: this should be handled
-            executeQueries(target, List(statement)).map(_.toLong)
+            executeQueries(target, Set(statement)).map(_.toLong)
           case None => ()
         }
     }
   }
 
+
+  def executeTransaction(config: JdbcConfig, queries: Set[SqlString]): Either[Throwable, Unit] = ???
+
   /**
     * Without trailing space
-    * @param skipSteps
-    * @param skippableStep
+    * @param steps
     * @return
     */
-  def getPostprocessingStatement(target: PostgresqlConfig, skipSteps: Set[OptionalWorkStep], skippableStep: Set[SkippableStep]): Option[String] = {
-    val statements = List(skipSteps.find(_ == Vacuum), skippableStep.find(_ == Analyze)).flatten.map(_.asString.toUpperCase)
+  def getPostprocessingStatement(target: PostgresqlConfig, steps: Set[Step]): Option[SqlString] = {
+    val statements = List(steps.find(_ == Vacuum), steps.find(_ == Analyze)).flatten.map(_.asString.toUpperCase)
     statements match {
       case Nil => None
-      case steps => Some(s"${steps.mkString(" ")} ${Common.getTable(target.schema)};")
+      case steps => Some(SqlString.unsafeCoerce(s"${steps.mkString(" ")} ${Common.getTable(target.schema)};"))
     }
   }
 
-  def executeQueries(target: PostgresqlConfig, queries: List[String]) = {
+  /**
+   * Create new connection and execute set of SQL update-statements inside it,
+   * close connection afterwards
+   *
+   * @param target configuration for JDBC target
+   * @param queries set of valid SQL statements in string representation
+   * @return number of updated rows in case of success, first failure otherwise
+   */
+  def executeQueries(target: JdbcConfig, queries: Set[SqlString]): Either[PostgresQueryError, Int] = {
     val conn = getConnection(target)
-    val result = shortCircuit(queries, 0, executeQuery(conn))
+    val result = queries.toList.traverseU(executeQuery(conn)).map(_.combineAll)
     conn.close()
     result
   }
 
+  /**
+   * Execute a single update-statement in provided Postgres connection
+   *
+   * @param connection Postgres connection
+   * @param sql string with valid SQL statement
+   * @return number of updated rows in case of success, failure otherwise
+   */
   def executeQuery(connection: PgConnection)(sql: String): Either[PostgresQueryError, Int] = {
     try {
       connection.createStatement().executeUpdate(sql).asRight
@@ -130,8 +146,7 @@ object PostgresqlLoader {
     val conn = getConnection(target)
     conn.setAutoCommit(false)
     val copyManager = new CopyManager(conn)
-
-    val result = shortCircuit(files, 0L, copyIn(copyManager, copyStatement))
+    val result = files.traverseU(copyIn(copyManager, copyStatement)).map(_.combineAll)
     if (result.isLeft) conn.rollback() else conn.commit()
     conn.close()
     result
@@ -167,21 +182,10 @@ object PostgresqlLoader {
     go(list, 0L)
   }
 
-  // Traverse all the things!!!
-  def shortCircuit[I, L, R: Semigroup](items: List[I], init: R, process: I => Either[L, R]): Either[L, R] = {
-    @tailrec def go(files: List[I], accumulated: R): Either[L, R] = files match {
-      case Nil => accumulated.asRight
-      case head :: tail => process(head) match {
-        case Right(result) => go(tail, result |+| accumulated)
-        case Left(error) => error.asLeft
-      }
-    }
-
-    go(items, init)
-  }
+  // Common for Redshift and PostgreSQL
 
 
-  def getConnection(target: PostgresqlConfig): PgConnection = {
+  def getConnection(target: JdbcConfig): PgConnection = {
     val url = s"jdbc:postgresql://${target.host}:${target.port}/${target.database}"
 
     val props = new Properties()

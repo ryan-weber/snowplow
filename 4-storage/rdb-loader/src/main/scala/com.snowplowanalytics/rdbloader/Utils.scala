@@ -146,7 +146,7 @@ object Utils {
    * @tparam Root some sealed trait with object descendants
    * @return whole set of objects
    */
-  private def sealedDescendants[Root: TypeTag]: Set[Root] = {
+  def sealedDescendants[Root: TypeTag]: Set[Root] = {
     val symbol = typeOf[Root].typeSymbol
     val internal = symbol.asInstanceOf[scala.reflect.internal.Symbols#Symbol]
     val descendants = if (internal.isSealed)

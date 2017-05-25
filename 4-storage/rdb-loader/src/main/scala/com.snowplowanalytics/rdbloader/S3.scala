@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Snowplow Analytics Ltd. All rights reserved.
+ * Copyright (c) 2012-2016 Snowplow Analytics Ltd. All rights reserved.
  *
  * This program is licensed to you under the Apache License Version 2.0,
  * and you may not use this file except in compliance with the Apache License Version 2.0.
@@ -10,14 +10,23 @@
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the Apache License Version 2.0 for the specific language governing permissions and limitations there under.
  */
-package com.snowplowanalytics.rdbloader.loaders
+package com.snowplowanalytics.rdbloader
 
-object Common {
+import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
+import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
 
-  val EventsTable = ".events"
+import Config.SnowplowAws
 
-  def getTable(databaseSchema: String): String =
-    databaseSchema + "." + EventsTable
+object S3 {
 
+  def getClient(awsConfig: SnowplowAws): AmazonS3 = {
+    val awsCredentials = new BasicAWSCredentials(awsConfig.accessKeyId, awsConfig.secretAccessKey)
+
+    AmazonS3ClientBuilder
+      .standard()
+      .withRegion(awsConfig.s3.region)
+      .withCredentials(new AWSStaticCredentialsProvider(awsCredentials))
+      .build()
+  }
 
 }

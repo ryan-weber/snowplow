@@ -82,7 +82,7 @@ object Config {
 
   case class SnowplowBuckets(
     assets: S3Bucket,
-    jsonpathAssets: Option[String],
+    jsonpathAssets: S3Bucket,
     log: String,
     enriched: EnrichedBucket,
     shredded: ShreddedBucket)

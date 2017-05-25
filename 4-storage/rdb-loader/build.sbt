@@ -20,6 +20,7 @@ lazy val root = project.in(file("."))
     crossScalaVersions := Seq("2.11.8", "2.12.1"),
     initialCommands := "import com.snowplowanalytics.rdbloader._"
   )
+
   .settings(BuildSettings.buildSettings)
   .settings(BuildSettings.scalifySettings)
   .settings(

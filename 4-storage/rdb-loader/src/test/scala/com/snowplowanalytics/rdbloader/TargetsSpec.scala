@@ -33,7 +33,7 @@ class TargetsSpec extends Specification { def is = s2"""
   private val resolverConfig = parseJson(
     """
       |{
-      |  "schema": "iglu:com.snowplowanalytics.iglu/resolver-config/jsonschema/1-0-2",
+      |  "databaseSchema": "iglu:com.snowplowanalytics.iglu/resolver-config/jsonschema/1-0-2",
       |  "data": {
       |    "cacheSize": 500,
       |    "repositories": [
@@ -59,7 +59,7 @@ class TargetsSpec extends Specification { def is = s2"""
     val config = """
       |
       |{
-      |    "schema": "iglu:com.snowplowanalytics.snowplow.storage/postgresql_config/jsonschema/1-0-0",
+      |    "databaseSchema": "iglu:com.snowplowanalytics.snowplow.storage/postgresql_config/jsonschema/1-0-0",
       |    "data": {
       |        "name": "PostgreSQL enriched events storage",
       |        "host": "mydatabase.host.acme.com",
@@ -68,7 +68,7 @@ class TargetsSpec extends Specification { def is = s2"""
       |        "sslMode": "DISABLE",
       |        "username": "ADD HERE",
       |        "password": "ADD HERE",
-      |        "schema": "atomic",
+      |        "databaseSchema": "atomic",
       |        "purpose": "ENRICHED_EVENTS"
       |    }
       |}
@@ -90,7 +90,7 @@ class TargetsSpec extends Specification { def is = s2"""
   def e2 = {
     val config = """
       |{
-      |    "schema": "iglu:com.snowplowanalytics.snowplow.storage/redshift_config/jsonschema/1-0-0",
+      |    "databaseSchema": "iglu:com.snowplowanalytics.snowplow.storage/redshift_config/jsonschema/1-0-0",
       |    "data": {
       |        "name": "AWS Redshift enriched events storage",
       |        "host": "ADD HERE",
@@ -99,7 +99,7 @@ class TargetsSpec extends Specification { def is = s2"""
       |        "sslMode": "DISABLE",
       |        "username": "ADD HERE",
       |        "password": "ADD HERE",
-      |        "schema": "atomic",
+      |        "databaseSchema": "atomic",
       |        "maxError": 1,
       |        "compRows": 20000,
       |        "purpose": "ENRICHED_EVENTS"
@@ -125,7 +125,7 @@ class TargetsSpec extends Specification { def is = s2"""
   def e3 = {
     val config = """
       |{
-      |    "schema": "iglu:com.snowplowanalytics.snowplow.storage/elastic_config/jsonschema/1-0-0",
+      |    "databaseSchema": "iglu:com.snowplowanalytics.snowplow.storage/elastic_config/jsonschema/1-0-0",
       |    "data": {
       |        "name": "Elasticsearch failed events storage",
       |        "host": "ADD HERE",
@@ -152,7 +152,7 @@ class TargetsSpec extends Specification { def is = s2"""
   def e4 = {
     val config = """
       |{
-      |    "schema": "iglu:com.snowplowanalytics.snowplow.storage/amazon_dynamodb_config/jsonschema/1-0-0",
+      |    "databaseSchema": "iglu:com.snowplowanalytics.snowplow.storage/amazon_dynamodb_config/jsonschema/1-0-0",
       |    "data": {
       |        "name": "AWS DynamoDB duplicates storage",
       |        "accessKeyId": "ADD HERE",
