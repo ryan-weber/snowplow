@@ -25,9 +25,9 @@ import scala.reflect.runtime.universe._
 import scala.reflect.runtime.{ universe => ru }
 import scala.util.control.NonFatal
 
-// Cats
-import cats.data.ValidatedNel
-import cats.syntax.either._
+import cats._
+import cats.data._
+import cats.implicits._
 
 // Circe
 import io.circe.{ HCursor, DecodingFailure, Json, Decoder, ParsingFailure }
@@ -164,4 +164,11 @@ object Utils {
     val mod = m.staticModule(desc.asClass.fullName)
     m.reflectModule(mod).instance
   }
+
+  /**
+   * Returns the given argument if `cond` is `true`, otherwise, unit lifted into F.
+   */
+  def whenA[F[_]: Applicative, A](cond: Boolean)(f: => F[A]): F[Unit] =
+    if (cond) implicitly[Applicative[F]].void(f) else implicitly[Applicative[F]].pure(())
+
 }

@@ -16,9 +16,10 @@ lazy val root = project.in(file("."))
     name := "rdbloader",
     version := "0.12.0-rc1",
     organization := "com.snowplowanalytics",
-    scalaVersion := "2.11.8",
-    crossScalaVersions := Seq("2.11.8", "2.12.1"),
-    initialCommands := "import com.snowplowanalytics.rdbloader._"
+    scalaVersion := "2.11.11",
+    crossScalaVersions := Seq("2.11.11", "2.12.2"),
+    initialCommands := "import com.snowplowanalytics.rdbloader._",
+    mainClass in Compile := Some("com.snowplowanalytics.rdbloader.Main")
   )
 
   .settings(BuildSettings.buildSettings)
@@ -33,6 +34,7 @@ lazy val root = project.in(file("."))
       Dependencies.json4s,
       Dependencies.igluClient,
       Dependencies.igluCore,
+      Dependencies.scalaTracker,
       Dependencies.circeYaml,
       Dependencies.circeGeneric,
       Dependencies.circeGenericExtra,

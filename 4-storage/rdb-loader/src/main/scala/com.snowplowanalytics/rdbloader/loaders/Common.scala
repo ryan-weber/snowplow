@@ -12,12 +12,30 @@
  */
 package com.snowplowanalytics.rdbloader.loaders
 
+import com.snowplowanalytics.rdbloader.RefinedTypes.AtomicEventsKey
+
 object Common {
 
-  val EventsTable = ".events"
+  val EventsTable = "events"
+
+  //                            year     month      day        hour       minute     second
+  val atomicPathPattern = "(run=[0-9]{4}-[0-1][0-9]-[0-3][0-9]-[0-2][0-9]-[0-6][0-9]-[0-6][0-9]/atomic-events)".r
+
+  /**
+   * Check if key has valid format for atomic-events folder
+   *
+   * @param s3key S3 path
+   * @return true if key contains `run=YYYY-MM-dd-HH-mm-ss/atomic-events` part
+   */
+  def isAtomicEvent(s3key: String): Boolean =
+    AtomicEventsKey.parse(s3key).isDefined
 
   def getTable(databaseSchema: String): String =
     databaseSchema + "." + EventsTable
 
+  def extractAtomicEventsSubpath(s3key: AtomicEventsKey): String = {
+    // .get is safe because AtomicEventsKey proven to have this part
+    atomicPathPattern.findFirstIn(s3key).get
+  }
 
 }

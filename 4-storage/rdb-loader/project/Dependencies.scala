@@ -21,6 +21,7 @@ object Dependencies {
     val json4s           = "3.2.11" // evicted by iglu-core with 3.3.0
     val igluClient       = "0.5.0"
     val igluCore         = "0.1.0"
+    val scalaTracker     = "0.3.0"
     val circeYaml        = "0.4.0"
     val circe            = "0.7.0"
     val cats             = "0.9.0"
@@ -36,16 +37,17 @@ object Dependencies {
   }
 
   // Scala
-  val scopt             = "com.github.scopt"           %% "scopt"                % V.scopt
-  val scalaz7           = "org.scalaz"                 %% "scalaz-core"          % V.scalaz7
-  val json4s            = "org.json4s"                 %% "json4s-jackson"       % V.json4s
-  val igluClient        = "com.snowplowanalytics"      %% "iglu-scala-client"    % V.igluClient
-  val igluCore          = "com.snowplowanalytics"      %% "iglu-core"            % V.igluCore     intransitive()
-  val cats              = "org.typelevel"              %% "cats"                 % V.cats
-  val circeCore         = "io.circe"                   %% "circe-core"           % V.circe
-  val circeYaml         = "io.circe"                   %% "circe-yaml"           % V.circeYaml
-  val circeGeneric      = "io.circe"                   %% "circe-generic"        % V.circe
-  val circeGenericExtra = "io.circe"                   %% "circe-generic-extras" % V.circe
+  val scopt             = "com.github.scopt"           %% "scopt"                  % V.scopt
+  val scalaz7           = "org.scalaz"                 %% "scalaz-core"            % V.scalaz7
+  val json4s            = "org.json4s"                 %% "json4s-jackson"         % V.json4s
+  val igluClient        = "com.snowplowanalytics"      %% "iglu-scala-client"      % V.igluClient
+  val igluCore          = "com.snowplowanalytics"      %% "iglu-core"              % V.igluCore     intransitive()
+  val scalaTracker      = "com.snowplowanalytics"      %% "snowplow-scala-tracker" % V.scalaTracker
+  val cats              = "org.typelevel"              %% "cats"                   % V.cats
+  val circeCore         = "io.circe"                   %% "circe-core"             % V.circe
+  val circeYaml         = "io.circe"                   %% "circe-yaml"             % V.circeYaml
+  val circeGeneric      = "io.circe"                   %% "circe-generic"          % V.circe
+  val circeGenericExtra = "io.circe"                   %% "circe-generic-extras"   % V.circe
 
   // Java
   val postgres          = "org.postgresql"             % "postgresql"            % V.postgres

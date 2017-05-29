@@ -121,7 +121,7 @@ object Targets {
     def username: String
     def password: String
 
-    def getTableName = Common.getTable(schema)
+    def eventsTable = Common.getTable(schema)
   }
 
 

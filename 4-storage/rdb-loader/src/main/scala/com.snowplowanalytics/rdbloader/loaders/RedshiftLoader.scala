@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Snowplow Analytics Ltd. All rights reserved.
+ * Copyright (c) 2016-2017 Snowplow Analytics Ltd. All rights reserved.
  *
  * This program is licensed to you under the Apache License Version 2.0,
  * and you may not use this file except in compliance with the Apache License Version 2.0.
@@ -13,14 +13,16 @@
 package com.snowplowanalytics.rdbloader
 package loaders
 
-import cats.data._
-import cats.syntax.all._
-import cats.instances.all._
-import Targets.RedshiftConfig
-import Config.{GzipCompression, NoneCompression, OutputCompression, SnowplowAws}
+// cats
+import cats.implicits._
+
+// This project
 import Main.{Analyze, Compupdate, Shred, Step, Vacuum}
+import PostgresqlLoader.{ executeTransaction, executeQueries }
 import RefinedTypes._
-import Monitoring.Tracker
+import Targets.RedshiftConfig
+import Utils.whenA
+import LoadTracker.log
 
 object RedshiftLoader {
 
@@ -30,65 +32,51 @@ object RedshiftLoader {
   val QuoteChar = "\\x01"
   val EscapeChar = "\\x02"
 
-  val ALTERED_ENRICHED_PATTERN = "(run=[0-9-]+/atomic-events)".r
-
+  /**
+   * SQL statements for particular shredded type, grouped by their purpose
+   *
+   * @param copy main COPY FROM statement to load shredded type in its dedicate table
+   * @param analyze ANALYZE SQL-statement for dedicated table
+   * @param vacuum VACUUM SQL-statement for dedicate table
+   */
   case class ShreddedStatements(copy: SqlString, analyze: SqlString, vacuum: SqlString)
 
-  def loadEventsAndShreddedTypes(config: Config, target: RedshiftConfig, steps: Set[Step]): Unit = {
-    val tracker = Monitoring.initializeTracking(config.monitoring)
 
-    val shreddedStatements = getShreddedStatements(config, target, steps)
-    val atomicCopyStatements = getAtomicCopyStatements(config, target, steps)
-    val manifestStatement = getManifestStatements(target.schema, shreddedStatements.size)
-    val copyStatements = shreddedStatements.map(_.copy) + atomicCopyStatements + manifestStatement
+  def loadEventsAndShreddedTypes(config: Config, target: RedshiftConfig, steps: Set[Step]) = {
+    val tracker = LoadTracker.initializeTracking(config.monitoring)
 
     for {
-      amount <- load(copyStatements, target)
-      _ <- vacuum(steps.contains(Vacuum), shreddedStatements.map(_.vacuum), target)
-      _ <- analyze(!steps.contains(Analyze), shreddedStatements.map(_.analyze), target)
+      atomicCopyStatements <- getAtomicCopyStatements(config, target, steps)
+      shreddedStatements   <- getShreddedStatements(config, target, steps).map(_.toSet)
+      manifestStatement = getManifestStatements(target.schema, shreddedStatements.size)
+      copyStatements = (shreddedStatements.map(_.copy) + atomicCopyStatements + manifestStatement).toList
+
+      vacuumStatements = (shreddedStatements.map(_.vacuum) + buildVacuumStatement(target.eventsTable)).toList
+      analyzeStatements = (shreddedStatements.map(_.analyze) + buildAnalyzeStatement(target.eventsTable)).toList
+
+      _ <- log(executeTransaction(target, copyStatements), tracker)
+      _ <- whenA(steps.contains(Vacuum))(executeQueries(target, vacuumStatements))
+      _ <- whenA(steps.contains(Analyze))(executeTransaction(target, analyzeStatements))
+
     } yield ()
-
-
   }
 
-  def trackIfEnabled(tracker: Option[Tracker], event: Either[Throwable, Int]): Unit = {
-    tracker match {
-      case Some(t) =>
-        event match {
-          case Right(amount) => t.trackSuccess(amount.toString)
-          case Left(error) => t.trackError(error)
-        }
-      case None => ()
-    }
-  }
+  case class TempThrowable(val message: String) extends Throwable
 
-  def load(copyStatements: Set[SqlString], target: RedshiftConfig) =
-    PostgresqlLoader.executeTransaction(target, copyStatements)
-
-  def vacuum(execute: Boolean, shreddedVacuumStatements: Set[SqlString], target: RedshiftConfig) = {
-    if (execute) {
-      val vacuumStatements = shreddedVacuumStatements + buildVacuumStatement(target.getTableName)
-      PostgresqlLoader.executeQueries(target, vacuumStatements).void
-    } else Right(())
-  }
-
-  def analyze(execute: Boolean, shreddedAnalyzeStatements: Set[SqlString], target: RedshiftConfig) = {
-    val analyzeStatements = shreddedAnalyzeStatements + buildAnalyzeStatement(target.getTableName)
-    PostgresqlLoader.executeTransaction(target, analyzeStatements)
-  }
-
-  def getAtomicCopyStatements(config: Config, target: RedshiftConfig, steps: Set[Step]): SqlString = {
-    if (isLegacy(config.enrich.versions.hadoopShred)) {
-      ???
-    } else {
-      val atomicEvents = ShreddedType.findFirst(config.aws, isAtomicEvent)
-      val atomicEventsRight = atomicEvents match {
-        case Some(e) => e
-        case None => throw new IllegalArgumentException("atomic-events is empty")
-      }
-
-      val alteredEnrichedSubdirictory = extractEnrichedSubdir(atomicEvents.get)
-      buildCopyFromTsvStatement(config, atomicEventsRight, target, steps)
+  /**
+   *
+   *
+   * @param config
+   * @param target
+   * @param steps
+   * @return
+   */
+  def getAtomicCopyStatements(config: Config, target: RedshiftConfig, steps: Set[Step]): Either[TempThrowable, SqlString] = {
+    S3.findAtomicEventsKey(config.aws) match {
+      case Some(atomicEventsKeyPath) =>
+        Right(buildCopyFromTsvStatement(config, atomicEventsKeyPath, target, steps))
+      case None =>
+        Left(TempThrowable(s"Cannot find atomic-events directory in shredded/good [${config.aws.s3.buckets.shredded.good}]"))
     }
   }
 
@@ -104,33 +92,38 @@ object RedshiftLoader {
   def sanitize(s: String, accessKey: String, secretKey: String): String =
     s.replaceAll(accessKey, "x" * accessKey.length).replaceAll(secretKey, "x" * secretKey.length)
 
-  // extracts run=xxx part
-  def extractEnrichedSubdir(fullPath: String): String = ???
-
-  def getShreddedStatements(config: Config, target: RedshiftConfig, steps: Set[Step]): Set[ShreddedStatements] = {
+  /**
+   *
+   *
+   * @param config
+   * @param target
+   * @param steps
+   * @return
+   */
+  def getShreddedStatements(config: Config, target: RedshiftConfig, steps: Set[Step]): Either[String, List[ShreddedStatements]] = {
     if (!steps.contains(Shred)) {
-      Set.empty[ShreddedStatements]
+      Right(List.empty[ShreddedStatements])
     } else {
-      val shreddedTypes = ShreddedType.discoverShreddedTypes(config.aws, target.schema)
+      val shreddedTypes = ShreddedType.discoverShreddedTypes(config.aws).toList.sequence
       val process = getShreddedStatement(config, target)(_)
-      shreddedTypes.map(process)
+      for {
+        types <- shreddedTypes
+        res <- types.traverse(process)
+      } yield res
     }
   }
 
-  def getShreddedStatement(config: Config, target: RedshiftConfig)(shreddedType: Either[String, ShreddedType]): ShreddedStatements = {
-    val shreddedTypeRight = shreddedType.right.toOption.get
+  def getShreddedStatement(config: Config, target: RedshiftConfig)(shreddedType: ShreddedType): Either[String, ShreddedStatements] = {
+    val jsonPathsFile = ShreddedType.discoverJsonPath(config.aws, shreddedType)
 
-    val jsonPathsFile =
-      ShreddedType.discoverJsonPath(config.aws, shreddedTypeRight)
+    jsonPathsFile.map { jp =>
+      val tableName = ShreddedType.getTable(shreddedType, target.schema)
+      val copyFromJson = buildCopyFromJsonStatement(config, shreddedType.getObjectPath, jp, tableName, target.maxError)
+      val analyze = buildAnalyzeStatement(target.eventsTable)
+      val vacuum = buildVacuumStatement(target.eventsTable)
 
-    val jsonPathsFileRight =
-      jsonPathsFile.right.toOption.get
-
-    val copyFromJson = buildCopyFromJsonStatement(config, shreddedTypeRight.getObjectPath, jsonPathsFileRight, target.getTableName, target.maxError)
-    val analyze = buildAnalyzeStatement(target.getTableName)
-    val vacuum = buildVacuumStatement(target.getTableName)
-
-    ShreddedStatements(copyFromJson, analyze, vacuum)
+      ShreddedStatements(copyFromJson, analyze, vacuum)
+    }
   }
 
   def getManifestStatements(databaseSchema: String, shreddedCardinality: Int): SqlString = {
@@ -146,53 +139,65 @@ object RedshiftLoader {
       | LIMIT 1;""".stripMargin)
   }
 
-  def buildAnalyzeStatement(tableName: String): SqlString = ???
+  def buildAnalyzeStatement(tableName: String): SqlString =
+    SqlString.unsafeCoerce(s"ANALYZE $tableName;")
 
-  def buildVacuumStatement(tableName: String): SqlString = ???
+  def buildVacuumStatement(tableName: String): SqlString =
+    SqlString.unsafeCoerce(s"VACUUM SORT ONLY $tableName;")
 
-  def buildCopyFromJsonStatement(config: Config, objectPath: String, jsonPathsFile: String, tableName: String, maxError: Int): SqlString = {
+  /**
+   * Build COPY FROM JSON SQL-statement for shredded types
+   * 
+   * @param config main Snowplow configuration
+   * @param s3path S3 path to folder with shredded JSON files
+   * @param jsonPathsFile S3 path to JSONPath file
+   * @param tableName valid Redshift table name for shredded type
+   * @return valid SQL statement to LOAD
+   */
+  def buildCopyFromJsonStatement(config: Config, s3path: String, jsonPathsFile: String, tableName: String, maxError: Int): SqlString = {
     val credentials = getCredentials(config.aws)
     val compressionFormat = getCompressionFormat(config.enrich.outputCompression)
 
     SqlString.unsafeCoerce(s"""
-       |COPY $tableName FROM '$objectPath'
+       |COPY $tableName FROM '$s3path'
        | CREDENTIALS '$credentials' JSON AS '$jsonPathsFile'
        | REGION AS '${config.aws.s3.region}'
        | MAXERROR $maxError TRUNCATE COLUMNS TIMEFORMAT 'auto'
        | ACCEPTINVCHARS $compressionFormat;""".stripMargin)
   }
 
-  def buildCopyFromTsvStatement(config: Config, s3path: String, target: RedshiftConfig, steps: Set[Step]): SqlString = {
+  /**
+   * Build COPY FROM TSV SQL-statement for non-shredded types and atomic.events table
+   *
+   * @param config main Snowplow configuration
+   * @param s3path S3 path to atomic-events folder with shredded TSV files
+   * @param target Redshift storage target configuration
+   * @param steps SQL steps
+   * @return valid SQL statement to LOAD
+   */
+  def buildCopyFromTsvStatement(config: Config, s3path: AtomicEventsKey, target: RedshiftConfig, steps: Set[Step]): SqlString = {
     val credentials = getCredentials(config.aws)
     val compressionFormat = getCompressionFormat(config.enrich.outputCompression)
-    val tableName = Common.getTable(target.schema)
     val comprows = if (steps.contains(Compupdate)) s"COMPUPDATE COMPROWS ${target.compRows}" else ""
+    target.eventsTable
 
-    val fixedObjectPath: String = ???
-
-    // TODO: config.enrich is incorrect!
     SqlString.unsafeCoerce(s"""
-       |COPY $tableName FROM '$fixedObjectPath'
+       |COPY ${target.eventsTable} FROM '$s3path'
        | CREDENTIALS '$credentials' REGION AS '${config.aws.s3.region}'
        | DELIMITER '$EventFieldSeparator' MAXERROR ${target.maxError}
        | EMPTYASNULL FILLRECORD TRUNCATECOLUMNS $comprows
        | TIMEFORMAT 'auto' ACCEPTINVCHARS $compressionFormat;""".stripMargin)
   }
 
-  def getCompressionFormat(outputCodec: OutputCompression): String = outputCodec match {
-    case NoneCompression => ""
-    case GzipCompression => "GZIP"
+  /**
+   * Stringify output codec to use in SQL statement
+   */
+  private def getCompressionFormat(outputCodec: Config.OutputCompression): String = outputCodec match {
+    case Config.NoneCompression => ""
+    case Config.GzipCompression => "GZIP"
   }
 
-  def getCredentials(aws: SnowplowAws): String =
+  def getCredentials(aws: Config.SnowplowAws): String =
     s"aws_access_key_id=${aws.accessKeyId};aws_secret_access_key=${aws.secretAccessKey}"
-
-  def isAtomicEvent(s3key: String): Boolean = ???
-
-  def isLegacy(version: String): Boolean =
-    version.split(".").toList match {
-      case major :: "5" :: _ => true
-      case _ => false
-    }
 
 }

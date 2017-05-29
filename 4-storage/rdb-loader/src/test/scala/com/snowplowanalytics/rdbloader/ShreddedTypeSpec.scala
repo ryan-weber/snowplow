@@ -32,27 +32,27 @@ class ShreddedTypeSpec extends Specification { def is = s2"""
   def e1 = {
     val path = "cross-batch-test/shredded-archive/run%3D2017-04-27-14-39-42/com.snowplowanalytics.snowplow/submit_form/jsonschema/1-0-0/part-00000-00001"
     val expectedPrefix = S3Bucket.unsafeCoerce("s3://rdb-test/cross-batch-test/shredded-archive/run%3D2017-04-27-14-39-42")
-    val expected = ShreddedType(expectedPrefix, "com.snowplowanalytics.snowplow", "submit_form", 1, "nonatomic")
-    val result = ShreddedType.transformPath("nonatomic", "rdb-test", path)
+    val expected = ShreddedType(expectedPrefix, "com.snowplowanalytics.snowplow", "submit_form", 1)
+    val result = ShreddedType.transformPath("rdb-test", path)
     result must beRight(expected)
   }
 
   def e2 = {
     val path = "cross-batch-test/shredded-archive/run%3D2017-04-27-14-39-42/submit_form/jsonschema/1-0-0/part-00000-00001"
-    val result = ShreddedType.transformPath("nonatomic", "rdb-test", path)
+    val result = ShreddedType.transformPath("rdb-test", path)
     result must beLeft
   }
 
   def e3 = {
     val path = "cross-batch-test/shredded-archive/run%3D2017-04-27-14-39-42/com.snowplowanalytics.snowplow/submit_form/jsonschema/1-0-0"
-    val result = ShreddedType.transformPath("nonatomic", "rdb-test", path)
+    val result = ShreddedType.transformPath("rdb-test", path)
     result must beLeft
   }
 
   def e4 = {
     val path = "com.snowplowanalytics.snowplow/submit_form/jsonschema/1-0-0/part-00000-00001"
-    val result = ShreddedType.transformPath("nonatomic", "rdb-test", path)
-    val expected = ShreddedType(S3Bucket.unsafeCoerce("s3://rdb-test"), "com.snowplowanalytics.snowplow", "submit_form", 1, "nonatomic")
+    val result = ShreddedType.transformPath("rdb-test", path)
+    val expected = ShreddedType(S3Bucket.unsafeCoerce("s3://rdb-test"), "com.snowplowanalytics.snowplow", "submit_form", 1)
     result must beRight(expected)
   }
 
@@ -69,13 +69,13 @@ class ShreddedTypeSpec extends Specification { def is = s2"""
 
     val commonPrefix = S3Bucket.unsafeCoerce("s3://snowplow-events/shredded/run%3D2017-04-27-14-39-42")
     val expected = Set(
-      ShreddedType(commonPrefix, "com.acme", "context", 1, "atomic"),
-      ShreddedType(commonPrefix, "com.acme", "context", 2, "atomic"),
-      ShreddedType(commonPrefix, "com.snowplowanalytics.snowplow", "submit_form", 1, "atomic"),
-      ShreddedType(commonPrefix, "com.snowplowanalytics.snowplow", "geolocation_context", 1, "atomic")
+      ShreddedType(commonPrefix, "com.acme", "context", 1),
+      ShreddedType(commonPrefix, "com.acme", "context", 2),
+      ShreddedType(commonPrefix, "com.snowplowanalytics.snowplow", "submit_form", 1),
+      ShreddedType(commonPrefix, "com.snowplowanalytics.snowplow", "geolocation_context", 1)
     ).map(Right.apply)
 
-    val result = ShreddedType.transformPaths(paths, "atomic", "snowplow-events")
+    val result = ShreddedType.transformPaths(paths, "snowplow-events")
 
     result must beEqualTo(expected)
   }
@@ -89,9 +89,9 @@ class ShreddedTypeSpec extends Specification { def is = s2"""
     )
 
     val commonPrefix = S3Bucket.unsafeCoerce("s3://snowplow-events/shredded/run%3D2017-04-27-14-39-42")
-    val expected = Set(ShreddedType(commonPrefix, "com.acme", "context", 1, "atomic")).map(Right.apply)
+    val expected = Set(ShreddedType(commonPrefix, "com.acme", "context", 1)).map(Right.apply)
 
-    val result = ShreddedType.transformPaths(paths, "atomic", "snowplow-events")
+    val result = ShreddedType.transformPaths(paths, "snowplow-events")
     result must beEqualTo(expected)
   }
 }

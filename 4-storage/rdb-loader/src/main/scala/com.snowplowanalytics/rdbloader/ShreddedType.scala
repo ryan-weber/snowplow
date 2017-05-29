@@ -12,14 +12,10 @@
  */
 package com.snowplowanalytics.rdbloader
 
-import com.amazonaws.services.s3.AmazonS3
-import com.amazonaws.services.s3.model.{ListObjectsV2Request, ListObjectsV2Result}
-
-import scala.collection.convert.wrapAsScala._
-import scala.collection.mutable.ListBuffer
 import com.snowplowanalytics.iglu.core.SchemaKey
+
 import RefinedTypes.S3Bucket
-import com.snowplowanalytics.rdbloader.Config.SnowplowAws
+import Config.SnowplowAws
 
 /**
  * Container for S3 folder with shredded JSONs ready to load
@@ -28,9 +24,8 @@ import com.snowplowanalytics.rdbloader.Config.SnowplowAws
  * @param vendor
  * @param name
  * @param model
- * @param databaseSchema
  */
-case class ShreddedType(prefix: S3Bucket, vendor: String, name: String, model: Int, databaseSchema: String) {
+case class ShreddedType(prefix: S3Bucket, vendor: String, name: String, model: Int) {
   def getObjectPath: String =
     s"$prefix$vendor/$name/jsonschema/$model-"
 }
@@ -45,33 +40,103 @@ object ShreddedType {
   /**
    * Searches S3 for all the files we can find containing shredded paths
    *
-   * @param databaseSchema
    * @return
    */
-  def discoverShreddedTypes(aws: SnowplowAws, databaseSchema: String): Set[Either[String, ShreddedType]] = {
+  def discoverShreddedTypes(aws: SnowplowAws): Set[Either[String, ShreddedType]] = {
     val s3 = S3.getClient(aws)
     val (bucket, prefix) = splitS3Path(aws.s3.buckets.shredded.good)
-    val types = listS3(s3, bucket, prefix)
-    transformPaths(types, databaseSchema, bucket)
+    val types = S3.listS3(s3, bucket, prefix)
+    transformPaths(types, bucket)
   }
 
   /**
    * IO-free function to filter, transform and group shredded types fetched with `listS3`
    *
    * @param paths list of all found S3 keys
-   * @param databaseSchema
    * @param bucket
    * @return
    */
-  def transformPaths(paths: List[String], databaseSchema: String, bucket: String): Set[Either[String, ShreddedType]] = {
+  def transformPaths(paths: List[String], bucket: String): Set[Either[String, ShreddedType]] = {
     val transform: String => Either[String, ShreddedType] =
-      transformPath(databaseSchema, bucket, _)
-    paths.filterNot(inAtomicEvents).map(transform).toSet
+      transformPath(bucket, _)
+    paths.filterNot(inAtomicEvents).filterNot(_.contains("$")).map(transform).toSet
   }
 
+  private val cache = collection.mutable.HashMap.empty[String, String]
+
+  val SnowplowHostedAssetsRoot = "s3://snowplow-hosted-assets"
+
+  val JsonpathsPath = "/4-storage/redshift-storage/jsonpaths/"
+
+
   def discoverJsonPath(snowplowAws: SnowplowAws, shreddedType: ShreddedType): Either[String, String] = {
+    val filename = s"""${toSnakeCase(shreddedType.name)}_${shreddedType.model}.json"""
+    val key = s"${shreddedType.vendor}/$filename"
+
+    cache.get(key) match {
+      case Some(jsonPath) =>
+        Right(jsonPath)
+      case None =>
+        snowplowAws.s3.buckets.jsonpathAssets match {
+          case Some(assets) =>
+            val path = S3Bucket.append(assets, shreddedType.vendor)
+            if (S3.fileExists(snowplowAws, path, filename))
+              Right(path + filename)
+            else
+              getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
+          case None =>
+            getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
+        }
+    }
+  }
+
+  def getSnowplowJsonPath(snowplowAws: SnowplowAws, vendor: String, filename: String): Either[String, String] = {
+    val hostedAssetsBucket = getHostedAssetsBucket(snowplowAws.s3.region)
+    val path = S3Bucket.append(hostedAssetsBucket, s"$JsonpathsPath$vendor")
+    if (S3.fileExists(snowplowAws, path, filename)) {
+      Right(path + filename)
+    } else {
+      Left(s"JSONPath file [$filename] not found at path [$path]")
+    }
+  }
+
+  def getJsonPath(bucket: String, path: String): Either[String, String] =
+    ???
+
+  def getFile(bucket: S3Bucket, filename: String): String = {
+
     ???
   }
+
+  def getHostedAssetsBucket(region: String): S3Bucket = {
+    val suffix = if (region == "eu-west-1") "" else s"-$region"
+    S3Bucket.unsafeCoerce(s"$SnowplowHostedAssetsRoot$suffix")
+  }
+
+  def fileExists(snowplowAws: SnowplowAws, path: String): Boolean = {
+
+    val s3 = S3.getClient(snowplowAws)
+    ???
+
+  }
+
+  def getTable(shreddedType: ShreddedType, databaseSchema: String): String = ???
+
+  /**
+   * Transforms CamelCase string into snake_case
+   * Also replaces all hyphens with underscores
+   *
+   * @see https://github.com/snowplow/iglu/blob/master/0-common/schema-ddl/src/main/scala/com.snowplowanalytics/iglu.schemaddl/StringUtils.scala
+   *
+   * @param str string to transform
+   * @return the underscored string
+   */
+  def toSnakeCase(str: String): String =
+    str.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+      .replaceAll("([a-z\\d])([A-Z])", "$1_$2")
+      .replaceAll("-", "_")
+      .replaceAll("""\.""", "_")
+      .toLowerCase
 
   /**
    * Parse S3 key path into shredded type
@@ -80,7 +145,9 @@ object ShreddedType {
    * @param filePath
    * @return
    */
-  def transformPath(databaseSchema: String, bucket: String, filePath: String): Either[String, ShreddedType] = {
+  // TODO: make sure it accept right filpath
+  def transformPath(bucket: String, filePath: String): Either[String, ShreddedType] = {
+    println(filePath)
     filePath.split("/").reverse.splitAt(MinShreddedPathLength) match {
       case (reverseSchema, reversePath) =>
         val igluPath = reverseSchema.tail.reverse.mkString("/")
@@ -88,7 +155,7 @@ object ShreddedType {
           case Some(key) =>
             val rootPath = reversePath.reverse.mkString("/")
             val prefix = S3Bucket.unsafeCoerce("s3://" + bucket + "/" + rootPath)
-            val result = ShreddedType(prefix, key.vendor, key.name, key.version.model, databaseSchema)
+            val result = ShreddedType(prefix, key.vendor, key.name, key.version.model)
             Right(result)
           case None =>
             Left(s"Invalid Iglu path [$igluPath]")
@@ -118,48 +185,5 @@ object ShreddedType {
    */
   def inAtomicEvents(key: String): Boolean =
     key.split("/").contains("atomic-events")
-
-  /**
-    * Helper method to get **all** keys from bucket.
-    * Unlike usual `s3.listObjects` it won't truncate response after 1000 items
-    * TODO: check if we really can reach 1000 items - we surely can
-    *
-    * @param s3
-    * @param bucket
-    * @param prefix
-    * @return
-    */
-  def listS3(s3: AmazonS3, bucket: String, prefix: String): List[String] = {
-    var result: ListObjectsV2Result = null
-    val buffer = ListBuffer.empty[String]
-    val req  = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix)
-
-    do {
-      result = s3.listObjectsV2(req)
-      val objects = result.getObjectSummaries.map(_.getKey)
-      buffer.appendAll(objects)
-    } while (result.isTruncated)
-    buffer.toList
-  }
-
-  def findFirst(aws: SnowplowAws, predicate: String => Boolean): Option[String] = {
-    val s3 = S3.getClient(aws)
-    ???
-  }
-
-  def listS3(s3: AmazonS3, s3folder: S3Bucket): List[String] = {
-    val (bucket, prefix) = splitS3Path(s3folder)
-
-    var result: ListObjectsV2Result = null
-    val buffer = ListBuffer.empty[String]
-    val req  = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix)
-
-    do {
-      result = s3.listObjectsV2(req)
-      val objects = result.getObjectSummaries.map(_.getKey)
-      buffer.appendAll(objects)
-    } while (result.isTruncated)
-    buffer.toList
-  }
 
 }

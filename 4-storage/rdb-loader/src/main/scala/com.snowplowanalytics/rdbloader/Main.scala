@@ -15,7 +15,9 @@ package com.snowplowanalytics.rdbloader
 // File
 import java.io.File
 
+import cats.data.Validated.{Invalid, Valid}
 import com.snowplowanalytics.rdbloader.Targets.{PostgresqlConfig, RedshiftConfig}
+import com.snowplowanalytics.rdbloader.loaders.RedshiftLoader
 
 // cats
 import cats.syntax.cartesian._
@@ -74,7 +76,6 @@ object Main {
 
   case class AppConfig(
     configYaml: Config,
-    b64config: Boolean,     // TODO: Why is it in AppConfig
     targets: Set[Targets.StorageTarget],
     steps: Set[Step]) // Contains parsed configs
 
@@ -95,7 +96,7 @@ object Main {
     (targets |@| config).map {
       case (t, c) =>
         val steps = constructSteps(cliConfig.skip.toSet, cliConfig.include.toSet)
-        AppConfig(c, cliConfig.b64config, t.toSet, steps)
+        AppConfig(c, t.toSet, steps)
     }
   }
 
@@ -132,15 +133,16 @@ object Main {
 
   }
 
-  def processTargets(config: AppConfig, target: StorageTarget) = target match {
+  def processTargets(config: Config, target: StorageTarget, steps: Set[Step]) = target match {
     case postgresqlTarget: PostgresqlConfig =>
-      val downloadFolder = config.configYaml.storage.download.folder.getOrElse("") // TODO: get default dir
-      val monitoring = config.configYaml.monitoring.snowplow == null               // TODO: handle monitoring
-      loaders.PostgresqlLoader.loadEvents(downloadFolder, postgresqlTarget, config.steps, monitoring)
+      val downloadFolder = config.storage.download.folder.getOrElse("") // TODO: get default dir
+      loaders.PostgresqlLoader.loadEvents(downloadFolder, postgresqlTarget, steps, config.monitoring)
     case redshiftTarget: RedshiftConfig =>
-      ???
-    case _ =>
-      ??? // Is not supported by RDB Loader
+      val e = RedshiftLoader.loadEventsAndShreddedTypes(config, redshiftTarget, steps)
+      println(e)
+    case wo =>
+      println(s"Unsupported target [${wo.name}]")
+      sys.exit(1)
   }
 
   def run(config: AppConfig) = {
@@ -149,8 +151,16 @@ object Main {
   }
 
   def main(argv: Array[String]): Unit = {
-    val value = parser.parse(argv, rawCliConfig) match {
-      case Some(config) => transform(config).leftMap(getErrorMessage)
+    val value = parser.parse(argv, rawCliConfig).map(transform) match {
+      case Some(Valid(config)) =>
+        config.targets.foreach { target =>
+          println(s"Processing ${target.name}")
+          processTargets(config.configYaml, target, config.steps)
+        }
+      case Some(Invalid(errors)) =>
+        errors.toList.foreach(println)
+        sys.exit(1)
+
       case None => sys.exit(1)
     }
 

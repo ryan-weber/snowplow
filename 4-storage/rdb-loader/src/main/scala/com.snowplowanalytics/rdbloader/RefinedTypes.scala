@@ -12,6 +12,8 @@
  */
 package com.snowplowanalytics.rdbloader
 
+import loaders.Common
+
 import shapeless.tag, tag._
 
 import cats.syntax.either._
@@ -36,7 +38,7 @@ object RefinedTypes {
       if (s.endsWith("/")) s
       else s + "/"
 
-    // TODO: s3n, s3a
+    // TODO: s3n, s3a. But in the end it should be always s3
     def parse(s: String): Either[String, S3Bucket] = s match {
       case _ if !s.startsWith("s3://") => "Bucket name must start with s3://".asLeft
       case _ if s.length > 1024        => "Key length cannot be more than 1024 symbols".asLeft
@@ -45,6 +47,12 @@ object RefinedTypes {
 
     def unsafeCoerce(s: String): S3Bucket =
       apply(appendTrailingSlash(s).asInstanceOf[S3Bucket])
+
+    def append(s3Bucket: S3Bucket, s: String): S3Bucket = {
+      val normalized = if (s.endsWith("/")) s else s + "/"
+      unsafeCoerce(s3Bucket + normalized)
+    }
+
   }
 
   implicit val bucketDecoder =
@@ -60,4 +68,23 @@ object RefinedTypes {
     def unsafeCoerce(s: String) = apply(s)
   }
 
+  sealed trait AtomicEventsKeyTag
+
+  /**
+   * Valid string of format
+   * `s3://some-bucket/artbitrary/path/run=YYYY-MM-dd-HH-mm-ss/atomic-events/somefile`
+   */
+  type AtomicEventsKey = String @@ AtomicEventsKeyTag
+
+  object AtomicEventsKey extends tag.Tagger[AtomicEventsKeyTag] {
+    def stripFilePart(key: AtomicEventsKey): S3Bucket = {
+      val string = key.split("atomic-events/").dropRight(1).mkString("atomic-events/")
+      S3Bucket.unsafeCoerce(string)
+    }
+
+    def parse(s: String): Option[AtomicEventsKey] =
+      Common.atomicPathPattern.findFirstIn(s).map(_.asInstanceOf[AtomicEventsKey])
+
+    def unsafeCoerce(s: String) = apply(s)
+  }
 }

@@ -21,8 +21,7 @@ import java.util.Properties
 import scala.annotation.tailrec
 import scala.collection.convert.wrapAsScala._
 
-import cats.syntax.all._
-import cats.instances.all._
+import cats.implicits._
 
 import org.postgresql.Driver
 import org.postgresql.jdbc.PgConnection
@@ -31,6 +30,7 @@ import org.postgresql.copy.CopyManager
 import Targets.{JdbcConfig, PostgresqlConfig}
 import Main.{Analyze, Step, Vacuum}
 import RefinedTypes.SqlString
+import Config.Monitoring
 
 
 object PostgresqlLoader {
@@ -48,31 +48,33 @@ object PostgresqlLoader {
     *
     * @param folder local folder with downloaded events
     * @param target
-    * @param tracking
+    * @param monitoring
     */
-  def loadEvents(folder: String,
-                 target: PostgresqlConfig,
-                 steps: Set[Step],
-                 tracking: Boolean): Unit = {
+  def loadEvents(folder: String, target: PostgresqlConfig, steps: Set[Step], monitoring: Monitoring): Unit = {
     val eventFiles = getEventFiles(Paths.get(folder))
     val copyResult = copyViaStdin(target, eventFiles)
+    val tracker = LoadTracker.initializeTracking(monitoring)
 
     copyResult match {
-      case Left(error) =>
-        Monitoring.trackLoadFailed(error)
+      case Left(_) =>
+        ???
       case Right(_) =>
-        Monitoring.trackLoadSucceeded()
         getPostprocessingStatement(target, steps) match {
           case Some(statement) =>
             // TODO: this should be handled
-            executeQueries(target, Set(statement)).map(_.toLong)
+            executeQueries(target, List(statement)).map(_.toLong)
           case None => ()
         }
     }
   }
 
 
-  def executeTransaction(config: JdbcConfig, queries: Set[SqlString]): Either[Throwable, Unit] = ???
+  def executeTransaction(config: JdbcConfig, queries: List[SqlString]): Either[PostgresQueryError, Unit] = {
+    val begin = SqlString.unsafeCoerce("BEGIN;")
+    val commit = SqlString.unsafeCoerce("COMMIT;")
+    val transaction = (begin :: queries) :+ commit
+    executeQueries(config, transaction).void
+  }
 
   /**
     * Without trailing space
@@ -95,9 +97,9 @@ object PostgresqlLoader {
    * @param queries set of valid SQL statements in string representation
    * @return number of updated rows in case of success, first failure otherwise
    */
-  def executeQueries(target: JdbcConfig, queries: Set[SqlString]): Either[PostgresQueryError, Int] = {
+  def executeQueries(target: JdbcConfig, queries: List[SqlString]): Either[PostgresQueryError, Int] = {
     val conn = getConnection(target)
-    val result = queries.toList.traverseU(executeQuery(conn)).map(_.combineAll)
+    val result = queries.traverse(executeQuery(conn)).map(_.combineAll)
     conn.close()
     result
   }
@@ -146,7 +148,7 @@ object PostgresqlLoader {
     val conn = getConnection(target)
     conn.setAutoCommit(false)
     val copyManager = new CopyManager(conn)
-    val result = files.traverseU(copyIn(copyManager, copyStatement)).map(_.combineAll)
+    val result = files.traverse(copyIn(copyManager, copyStatement)).map(_.combineAll)
     if (result.isLeft) conn.rollback() else conn.commit()
     conn.close()
     result

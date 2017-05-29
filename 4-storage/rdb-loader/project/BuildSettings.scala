@@ -15,6 +15,11 @@
 import sbt._
 import Keys._
 
+// sbt-assembly
+import sbtassembly._
+import sbtassembly.AssemblyKeys._
+
+
 /**
  * Common settings-patterns for Snowplow apps and libraries.
  * To enable any of these you need to explicitly add Settings value to build.sbt
@@ -35,13 +40,24 @@ object BuildSettings {
       "-Xfatal-warnings",
       "-Xlint",
       "-Yinline-warnings",
-//      "-Ywarn-dead-code",
+      "-language:higherKinds",
+      "-Ypartial-unification",
       "-Xfuture"),
 
     scalacOptions in (Compile, console) := Seq(
       "-deprecation",
       "-encoding", "UTF-8"
     )
+  )
+
+  // sbt-assembly settings
+  lazy val assemblySettings = Seq(
+    assemblyJarName in assembly := { name.value + "-" + version.value + ".jar" },
+
+    assemblyMergeStrategy in assembly := {
+      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
   )
 
   /**

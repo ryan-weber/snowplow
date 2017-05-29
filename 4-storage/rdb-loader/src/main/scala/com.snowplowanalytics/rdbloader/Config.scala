@@ -82,7 +82,7 @@ object Config {
 
   case class SnowplowBuckets(
     assets: S3Bucket,
-    jsonpathAssets: S3Bucket,
+    jsonpathAssets: Option[S3Bucket],
     log: String,
     enriched: EnrichedBucket,
     shredded: ShreddedBucket)
@@ -182,7 +182,7 @@ object Config {
   case class SnowplowMonitoring(
     method: TrackerMethod,
     appId: String,
-    collector: String)  // Host/port pair
+    collector: Option[String])  // Host/port pair
 
   sealed trait TrackerMethod extends StringEnum
   case object GetMethod extends TrackerMethod { val asString = "get" }
