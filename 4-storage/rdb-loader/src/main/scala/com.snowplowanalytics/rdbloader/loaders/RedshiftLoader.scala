@@ -213,7 +213,8 @@ object RedshiftLoader {
       if (!steps.contains(Shred)) {
         Right(List.empty[ShreddedStatements])
       } else {
-        val shreddedTypes = ShreddedType.discoverShreddedTypes(config.aws).toList.sequence
+        val shredJobVersion = config.storage.versions.relationalDatabaseShredder
+        val shreddedTypes = ShreddedType.discoverShreddedTypes(config.aws, shredJobVersion).toList.sequence
         val process = getShreddedStatement(config, target)(_)
         for {
           types <- shreddedTypes

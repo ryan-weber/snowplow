@@ -14,7 +14,9 @@ package com.snowplowanalytics.rdbloader
 
 // Scala
 import scala.collection.SortedSet
-import scala.collection.breakOut
+
+// cats
+import cats.implicits._
 
 // Iglu core
 import com.snowplowanalytics.iglu.core.SchemaKey
@@ -57,6 +59,12 @@ object ShreddedType {
    */
   val JsonpathsPath = "/4-storage/redshift-storage/jsonpaths/"
 
+  val ShreddedSubpathPattern =
+    ("""vendor=(?<vendor>[a-zA-Z0-9-_.]+)""" +
+     """/name=(?<name>[a-zA-Z0-9-_]+)""" +
+     """/format=(?<format>[a-zA-Z0-9-_]+)""" +
+     """/version=(?<schemaver>[1-9][0-9]*(?:-(?:0|[1-9][0-9]*)){2})$""").r
+
   /**
    * vendor + name + format + version + filename
    */
@@ -68,14 +76,15 @@ object ShreddedType {
    * Searches S3 for all the files we can find containing shredded paths
    *
    * @param aws Snowplow AWS configuration
+   * @param shredJob version of shred job to decide what path format we're discovering
    * @return sorted set (only unique values) of discovered shredded type results,
    *         where result can be either shredded type, or discovery error
    */
-  def discoverShreddedTypes(aws: SnowplowAws): SortedSet[Either[DiscoveryError, ShreddedType]] = {
+  def discoverShreddedTypes(aws: SnowplowAws, shredJob: Semver): SortedSet[Either[DiscoveryError, ShreddedType]] = {
     val s3 = S3.getClient(aws)
     val (bucket, prefix) = S3.splitS3Path(aws.s3.buckets.shredded.good)
     val types = S3.listS3(s3, bucket, prefix)
-    transformPaths(types, bucket)
+    transformPaths(types, bucket, shredJob)
   }
 
   /**
@@ -83,14 +92,15 @@ object ShreddedType {
    *
    * @param paths list of all found S3 keys
    * @param bucket S3 bucket name (without `s3://` prefix)
+   * @param shredJob version of shred job to decide what path format we're discovering
    * @return sorted set (only unique values) of discovered shredded type results,
    *         where result can be either shredded type, or discovery error
    */
-  def transformPaths(paths: List[String], bucket: String): SortedSet[Either[DiscoveryError, ShreddedType]] = {
+  def transformPaths(paths: List[String], bucket: String, shredJob: Semver): SortedSet[Either[DiscoveryError, ShreddedType]] = {
     val transform: String => Either[DiscoveryError, ShreddedType] =
-      transformPath(bucket, _)
+      transformPath(bucket, _, shredJob)
     val list: List[Either[DiscoveryError, ShreddedType]] =
-      paths.filterNot(inAtomicEvents).filterNot(specialFile).map(transform)(breakOut)
+      paths.filterNot(inAtomicEvents).filterNot(specialFile).map(transform)
     toSortedSet(list)
   }
 
@@ -172,24 +182,44 @@ object ShreddedType {
    *
    * @param bucket
    * @param filePath
+   * @param shredJob version of shred job to decide what path format should be present
    * @return
    */
   // TODO: make sure it accept right filepath
-  def transformPath(bucket: String, filePath: String): Either[DiscoveryError, ShreddedType] = {
+  def transformPath(bucket: String, filePath: String, shredJob: Semver): Either[DiscoveryError, ShreddedType] = {
     filePath.split("/").reverse.splitAt(MinShreddedPathLength) match {
       case (reverseSchema, reversePath) =>
-        val igluPath = reverseSchema.tail.reverse.mkString("/")
-        SchemaKey.fromPath(igluPath) match {
+        val subpath = reverseSchema.tail.reverse.mkString("/")
+        extractSchemaKey(subpath, shredJob) match {
           case Some(key) =>
             val rootPath = reversePath.reverse.mkString("/")
             val prefix = S3Bucket.unsafeCoerce("s3://" + bucket + "/" + rootPath)
             val result = ShreddedType(prefix, key.vendor, key.name, key.version.model)
             Right(result)
           case None =>
-            Left(DiscoveryError(s"Shredded type discovered in invalid Iglu path [$igluPath]"))
+            Left(DiscoveryError(s"Shredded type discovered in invalid subpath [s3://$bucket/$filePath]"))
         }
     }
   }
+
+  /**
+   * Extract `SchemaKey` from subpath, which can be
+   * legacy-style (pre 1.5.0) com.acme/schema-name/jsonschema/1-0-0 or
+   * modern-style (post-1.5.0) vendor=com.acme/name=schema-name/format=jsonschema/version=1-0-0
+   * This function transforms any of above valid paths to `SchemaKey`
+   *
+   * @param subpath S3 subpath of four `SchemaKey` elements
+   * @param shredJob shred job version to decide what format should be present
+   * @return valid schema key if found
+   */
+  def extractSchemaKey(subpath: String, shredJob: Semver): Option[SchemaKey] =
+    if (shredJob <= Semver(1,5,0)) SchemaKey.fromPath(subpath)
+    else subpath match {
+      case ShreddedSubpathPattern(vendor, name, format, version) =>
+        val igluPath = s"$vendor/$name/$format/$version"
+        SchemaKey.fromPath(igluPath)
+      case _ => None
+    }
 
   /**
    * Predicate to check if S3 key is in atomic-events folder
