@@ -39,17 +39,19 @@ class ConfigSpec extends Specification { def is = s2"""
   """
 
   def e1 = {
-    import io.circe.generic.auto._
 
     val storageYaml =
       """
         |download:
         |  folder: # Postgres-only config option. Where to store the downloaded files. Leave blank for Redshift
+        |versions:
+        |  relational_database_shredder: 1.8.0
+        |  hadoop_elasticsearch: 0.1.0
       """.stripMargin
 
     val ast: Either[Error, Json] = parser.parse(storageYaml)
     val storage = ast.flatMap(_.as[Config.Storage])
-    storage must beRight(Config.Storage(Config.Download(None)))
+    storage must beRight(Config.Storage(Config.Download(None), Config.StorageVersions(Semver(1,8,0), Semver(0,1,0))))
   }
 
   def e2 = {
@@ -62,7 +64,7 @@ class ConfigSpec extends Specification { def is = s2"""
 
     val ast: Either[Error, Json] = parser.parse(monitoringYaml)
     val storage = ast.flatMap(_.as[Config.SnowplowMonitoring])
-    storage must beRight(Config.SnowplowMonitoring(Config.GetMethod, "ADD HERE", "ADD HERE"))
+    storage must beRight(Config.SnowplowMonitoring(Config.GetMethod, "ADD HERE", Some("ADD HERE")))
   }
 
   def e3 = {
@@ -80,7 +82,7 @@ class ConfigSpec extends Specification { def is = s2"""
     val ast: Either[Error, Json] = parser.parse(monitoringYaml)
     val storage = ast.flatMap(_.as[Config.Monitoring])
 
-    val snowplow = Config.SnowplowMonitoring(Config.GetMethod, "ADD HERE", "ADD HERE")
+    val snowplow = Config.SnowplowMonitoring(Config.GetMethod, "ADD HERE", Some("ADD HERE"))
     val logging = Config.Logging(Config.DebugLevel)
     val expected = Config.Monitoring(Map("fromString" -> "bar"), logging, snowplow)
 
@@ -90,11 +92,8 @@ class ConfigSpec extends Specification { def is = s2"""
   def e4 = {
     val enrichYaml =
       """
-        |job_name: Snowplow ETL # Give your job a name
         |versions:
-        |  hadoop_enrich: 1.8.0 # Version of the Hadoop Enrichment process
-        |  hadoop_shred: 0.10.0 # Version of the Hadoop Shredding process
-        |  hadoop_elasticsearch: 0.1.0 # Version of the Hadoop to Elasticsearch copying process
+        |  spark_enrich: 1.8.0 # Version of the Hadoop Enrichment process
         |continue_on_unexpected_error: false # Set to 'true' (and set :out_errors: above) if you don't want any exceptions thrown from ETL
         |output_compression: NONE # Compression only supported with Redshift, set to NONE if you have Postgres targets. Allowed formats: NONE, GZIP
       """.stripMargin
@@ -102,8 +101,8 @@ class ConfigSpec extends Specification { def is = s2"""
     val ast: Either[Error, Json] = parser.parse(enrichYaml)
     val storage = ast.flatMap(_.as[Config.Enrich])
 
-    val versions = Config.EnrichVersions("1.8.0", "0.10.0", "0.1.0")
-    val expected = Config.Enrich("Snowplow ETL", versions, false, Config.NoneCompression)
+    val versions = Config.EnrichVersions(Semver(1,8,0))
+    val expected = Config.Enrich(versions, false, Config.NoneCompression)
 
     storage must beRight(expected)
   }
@@ -140,6 +139,7 @@ class ConfigSpec extends Specification { def is = s2"""
         |  lingual:              # Optional. To launch on cluster, provide version, "1.1", keep quotes. Leave empty otherwise.
         |# Adjust your Hadoop cluster below
         |jobflow:
+        |  job_name: Snowplow ETL # Give your job a name
         |  master_instance_type: m1.medium
         |  core_instance_count: 2
         |  core_instance_type: m1.medium
@@ -230,6 +230,7 @@ class ConfigSpec extends Specification { def is = s2"""
         |      lingual:              # Optional. To launch on cluster, provide version, "1.1", keep quotes. Leave empty otherwise.
         |    # Adjust your Hadoop cluster below
         |    jobflow:
+        |      job_name: Snowplow ETL # Give your job a name
         |      master_instance_type: m1.medium
         |      core_instance_count: 2
         |      core_instance_type: m1.medium
@@ -241,16 +242,16 @@ class ConfigSpec extends Specification { def is = s2"""
         |collectors:
         |  format: cloudfront # For example: 'clj-tomcat' for the Clojure Collector, 'thrift' for Thrift records, 'tsv/com.amazon.aws.cloudfront/wd_access_log' for Cloudfront access logs or 'ndjson/urbanairship.connect/v1' for UrbanAirship Connect events
         |enrich:
-        |  job_name: Snowplow ETL # Give your job a name
         |  versions:
-        |    hadoop_enrich: 1.8.0 # Version of the Hadoop Enrichment process
-        |    hadoop_shred: 0.10.0 # Version of the Hadoop Shredding process
-        |    hadoop_elasticsearch: 0.1.0 # Version of the Hadoop to Elasticsearch copying process
+        |    spark_enrich: 1.8.0 # Version of the Hadoop Enrichment process
         |  continue_on_unexpected_error: false # Set to 'true' (and set :out_errors: above) if you don't want any exceptions thrown from ETL
         |  output_compression: NONE # Compression only supported with Redshift, set to NONE if you have Postgres targets. Allowed formats: NONE, GZIP
         |storage:
         |  download:
         |    folder: # Postgres-only config option. Where to store the downloaded files. Leave blank for Redshift
+        |  versions:
+        |    relational_database_shredder: 0.10.0 # Version of the Hadoop Shredding process
+        |    hadoop_elasticsearch: 0.1.0 # Version of the Hadoop to Elasticsearch copying process
         |monitoring:
         |  tags: {} # Name-value pairs describing this job
         |  logging:

@@ -25,6 +25,7 @@ import scala.reflect.runtime.universe._
 import scala.reflect.runtime.{ universe => ru }
 import scala.util.control.NonFatal
 
+// cats
 import cats._
 import cats.data._
 import cats.implicits._
@@ -200,4 +201,8 @@ object Utils {
   def whenA[F[_]: Applicative, A](cond: Boolean)(f: => F[A]): F[Unit] =
     if (cond) implicitly[Applicative[F]].void(f) else implicitly[Applicative[F]].pure(())
 
+  object IntString {
+    def unapply(s: String): Option[Int] =
+      try { Some(s.toInt) } catch { case _: NumberFormatException => None }
+  }
 }

@@ -12,18 +12,24 @@
  */
 package com.snowplowanalytics.rdbloader
 
+// Java
 import java.io.File
 
+// cats
 import cats.syntax.either._
 
+// Circe
 import io.circe.{ Decoder, Json => Yaml, Error }
 import io.circe.generic.auto._
 import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.decoding.ConfiguredDecoder
 
+// Circe YAML
 import io.circe.yaml.parser
 
+// This project
 import Utils._
+import Semver._
 
 /**
  * Full Snowplow `config.yml` runtime representation
@@ -107,7 +113,7 @@ object Config {
   // aws.emr section
 
   case class SnowplowEmr(
-    amiVersion: String,
+    amiVersion: Semver,
     region: String,
     jobflowRole: String,
     serviceRole: String,
@@ -125,12 +131,20 @@ object Config {
     lingual: Option[String])
 
   case class EmrJobflow(
+    jobName: String,
     masterInstanceType: String,
     coreInstanceCount: Int,
     coreInstanceType: String,
+    coreInstanceEbs: Option[EmrCoreInstanceEbs],
     taskInstanceCount: Int,
     taskInstanceType: String,
     taskInstanceBid: BigDecimal)
+
+  case class EmrCoreInstanceEbs(
+    volumeSize: Int,
+    volumeType: String,
+    volumeIops: Option[Int],
+    ebsOptiomized: Option[Boolean])
 
   // collectors section
 
@@ -146,15 +160,11 @@ object Config {
   // enrich section
 
   case class Enrich(
-    jobName: String,
     versions: EnrichVersions,
     continueOnUnexpectedError: Boolean,
     outputCompression: OutputCompression)
 
-  case class EnrichVersions(
-    hadoopEnrich: String,
-    hadoopShred: String,
-    hadoopElasticsearch: String)
+  case class EnrichVersions(sparkEnrich: Semver)
 
   sealed trait OutputCompression extends StringEnum
   case object NoneCompression extends OutputCompression { val asString = "NONE" }
@@ -162,7 +172,13 @@ object Config {
 
   // storage section
 
-  case class Storage(download: Download)
+  case class Storage(
+    download: Download,
+    versions: StorageVersions)
+
+  case class StorageVersions(
+    relationalDatabaseShredder: Semver,
+    hadoopElasticsearch: Semver)
 
   case class Download(folder: Option[String])
 
@@ -197,7 +213,7 @@ object Config {
     /**
      * Allow circe codecs decode snake case YAML keys into camel case
      * Used by codecs with `ConfiguredDecoder`
-     * Codecs should be declared in exact same order (reverse of their appearence in class)
+     * Codecs should be declared in exact this order (reverse of their appearence in class)
      */
     private implicit val decoderConfiguration =
       Configuration.default.withSnakeCaseKeys
@@ -226,6 +242,9 @@ object Config {
     implicit val decodeCollectorFormat: Decoder[CollectorFormat] =
       decodeStringEnum[CollectorFormat]
 
+    implicit val emrCoreInstanceEbsDecoder: Decoder[EmrCoreInstanceEbs] =
+      ConfiguredDecoder.decodeCaseClass
+
     implicit val emrJobflowDecoder: Decoder[EmrJobflow] =
       ConfiguredDecoder.decodeCaseClass
 
@@ -241,8 +260,13 @@ object Config {
     implicit val awsDecoder: Decoder[SnowplowAws] =
       ConfiguredDecoder.decodeCaseClass
 
-    implicit val configDecoder: Decoder[Config] =
+    implicit val storageVersionsDecoder: Decoder[StorageVersions] =
       ConfiguredDecoder.decodeCaseClass
 
+    implicit val storageDecoder: Decoder[Storage] =
+      ConfiguredDecoder.decodeCaseClass
+
+    implicit val configDecoder: Decoder[Config] =
+      ConfiguredDecoder.decodeCaseClass
   }
 }
