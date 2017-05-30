@@ -12,25 +12,30 @@
  */
 package com.snowplowanalytics.rdbloader
 
+// Java
 import java.io.File
 
-import cats.data.ValidatedNel
-import cats.syntax.traverse._
-import cats.instances.list._
-import cats.syntax.either._
-import cats.syntax.validated._
+// Cats
+import cats.data._
+import cats.implicits._
+
+// Circe
 import io.circe.Json
 import io.circe.Decoder._
 import io.circe.generic.auto._
+
+// Json4s
 import org.json4s.JValue
+
+// JSON Schema Validator
 import com.github.fge.jsonschema.core.report.ProcessingMessage
-import com.snowplowanalytics.rdbloader.loaders.Common
 
 // Iglu client
 import com.snowplowanalytics.iglu.core.SchemaKey
 import com.snowplowanalytics.iglu.client.Resolver
 import com.snowplowanalytics.iglu.client.validation.ValidatableJValue._
 
+// This project
 import Utils._
 import Compat._
 
@@ -121,7 +126,7 @@ object Targets {
     def username: String
     def password: String
 
-    def eventsTable = Common.getTable(schema)
+    def eventsTable = loaders.Common.getEventsTable(schema)
   }
 
 
@@ -160,17 +165,14 @@ object Targets {
     } yield (key.name, data)
 
     nameDataPair match {
+      case Some(("redshift_config", data)) => data.as[RedshiftConfig].leftMap(DecodingError.apply)
+      case Some(("postgresql_config", data)) => data.as[PostgresqlConfig].leftMap(DecodingError.apply)
       case Some(("elastic_config", data)) => data.as[ElasticConfig].leftMap(DecodingError.apply)
       case Some(("amazon_dynamodb_config", data)) => data.as[AmazonDynamodbConfig].leftMap(DecodingError.apply)
-      case Some(("postgresql_config", data)) => data.as[PostgresqlConfig].leftMap(DecodingError.apply)
-      case Some(("redshift_config", data)) => data.as[RedshiftConfig].leftMap(DecodingError.apply)
       case Some((name, _)) => DecodingError(s"Unknown storage target [$name]").asLeft
       case None => DecodingError("Not a self-describing JSON was used as storage target configuration").asLeft
     }
   }
-
-  import cats.data._
-
 
   /**
     * Parse string as `StorageTarget` validating it via Iglu resolver

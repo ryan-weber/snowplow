@@ -40,7 +40,7 @@ object S3 {
    * Split S3 path into bucket name and filePath
    *
    * @param path S3 full path without `s3://` filePath and with trailing slash
-   * @return pair of bucket name and remaining path
+   * @return pair of bucket name and remaining path ("some-bucket", "some/prefix/")
    */
   private[rdbloader] def splitS3Path(path: S3Bucket): (String, String) = {
     path.stripPrefix("s3://").split("/").toList match {
@@ -50,6 +50,14 @@ object S3 {
     }
   }
 
+  /**
+   * Check if some `file` exists in S3 `path`
+   *
+   * @param snowplowAws Snowplow AWS configuration
+   * @param path valid S3 path (with trailing slash)
+   * @param file file name
+   * @return true if file exists, false if file doesn't exist or not available
+   */
   def fileExists(snowplowAws: SnowplowAws, path: S3Bucket, file: String): Boolean = {
     val s3 = getClient(snowplowAws)
     val (bucket, prefix) = splitS3Path(path)
@@ -85,28 +93,29 @@ object S3 {
     buffer.toList
   }
 
-  def findAtomicEventsKey(aws: SnowplowAws): Option[AtomicEventsKey] = {
+  /**
+   * Find
+   *
+   * @param aws
+   * @return
+   */
+  def findAtomicEventsKey(aws: SnowplowAws): Option[S3Bucket] = {
     val s3 = S3.getClient(aws)
     val (bucket, prefix) = splitS3Path(aws.s3.buckets.shredded.good)
 
     var result: ListObjectsV2Result = null
     val req  = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix).withMaxKeys(10)
-    var end: Option[AtomicEventsKey] = None
+    var end: Option[String] = None
 
     do {
       result = s3.listObjectsV2(req)
       val objects = result.getObjectSummaries.map(_.getKey)
-      end = objects.map(AtomicEventsKey.parse).collectFirst {
-        case Some(key) => key
+      end = objects.map(AtomicEventsKey.extractAtomicSubpath).collectFirst {
+        case Some(subpath) => subpath   // run=YYYY-MM-dd-HH-mm-ss/atomic
       }
     } while (result.isTruncated && end.nonEmpty)
-    end.map { key =>
-      // TODO: wtf?
-      val q = AtomicEventsKey.unsafeCoerce("s3://" + bucket + "/" + prefix + key + "/")
-      println(bucket)
-      println(q)
-      q
-    }
+
+    end.map { subpath => S3Bucket.unsafeCoerce("s3://" + bucket + "/" + prefix + subpath + "/") }
   }
 
   def listS3(s3: AmazonS3, s3folder: S3Bucket): List[String] = {

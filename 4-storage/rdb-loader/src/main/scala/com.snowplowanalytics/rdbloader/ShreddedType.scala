@@ -12,39 +12,68 @@
  */
 package com.snowplowanalytics.rdbloader
 
+// Scala
+import scala.collection.SortedSet
+import scala.collection.breakOut
+
+// Iglu core
 import com.snowplowanalytics.iglu.core.SchemaKey
 
+// This project
+import Utils.toSnakeCase
 import RefinedTypes.S3Bucket
 import Config.SnowplowAws
 
 /**
  * Container for S3 folder with shredded JSONs ready to load
+ * Usually it represents self-describing event or custom/derived context
  *
- * @param prefix
- * @param vendor
- * @param name
- * @param model
+ * @param prefix full S3 path, where folder with shredded JSONs resides
+ * @param vendor self-describing type's vendor
+ * @param name self-describing type's name
+ * @param model self-describing type's SchemaVer model
  */
 case class ShreddedType(prefix: S3Bucket, vendor: String, name: String, model: Int) {
+  /**
+   * Get S3 prefix which Redshift should LOAD FROM
+   */
   def getObjectPath: String =
     s"$prefix$vendor/$name/jsonschema/$model-"
 }
 
+/**
+ * Companion object for `ShreddedType` containing discovering functions
+ */
 object ShreddedType {
+
+  /**
+   * Basis for Snowplow hosted assets bucket.
+   * Can be modified to match specific region
+   */
+  val SnowplowHostedAssetsRoot = "s3://snowplow-hosted-assets"
+
+  /**
+   * Default JSONPaths path
+   */
+  val JsonpathsPath = "/4-storage/redshift-storage/jsonpaths/"
 
   /**
    * vendor + name + format + version + filename
    */
   private val MinShreddedPathLength = 5
 
+  private val cache = collection.mutable.HashMap.empty[String, String]
+
   /**
    * Searches S3 for all the files we can find containing shredded paths
    *
-   * @return
+   * @param aws Snowplow AWS configuration
+   * @return sorted set (only unique values) of discovered shredded type results,
+   *         where result can be either shredded type, or discovery error
    */
-  def discoverShreddedTypes(aws: SnowplowAws): Set[Either[String, ShreddedType]] = {
+  def discoverShreddedTypes(aws: SnowplowAws): SortedSet[Either[DiscoveryError, ShreddedType]] = {
     val s3 = S3.getClient(aws)
-    val (bucket, prefix) = splitS3Path(aws.s3.buckets.shredded.good)
+    val (bucket, prefix) = S3.splitS3Path(aws.s3.buckets.shredded.good)
     val types = S3.listS3(s3, bucket, prefix)
     transformPaths(types, bucket)
   }
@@ -53,90 +82,90 @@ object ShreddedType {
    * IO-free function to filter, transform and group shredded types fetched with `listS3`
    *
    * @param paths list of all found S3 keys
-   * @param bucket
-   * @return
+   * @param bucket S3 bucket name (without `s3://` prefix)
+   * @return sorted set (only unique values) of discovered shredded type results,
+   *         where result can be either shredded type, or discovery error
    */
-  def transformPaths(paths: List[String], bucket: String): Set[Either[String, ShreddedType]] = {
-    val transform: String => Either[String, ShreddedType] =
+  def transformPaths(paths: List[String], bucket: String): SortedSet[Either[DiscoveryError, ShreddedType]] = {
+    val transform: String => Either[DiscoveryError, ShreddedType] =
       transformPath(bucket, _)
-    paths.filterNot(inAtomicEvents).filterNot(_.contains("$")).map(transform).toSet
+    val list: List[Either[DiscoveryError, ShreddedType]] =
+      paths.filterNot(inAtomicEvents).filterNot(specialFile).map(transform)(breakOut)
+    toSortedSet(list)
   }
 
-  private val cache = collection.mutable.HashMap.empty[String, String]
-
-  val SnowplowHostedAssetsRoot = "s3://snowplow-hosted-assets"
-
-  val JsonpathsPath = "/4-storage/redshift-storage/jsonpaths/"
-
-
-  def discoverJsonPath(snowplowAws: SnowplowAws, shreddedType: ShreddedType): Either[String, String] = {
+  /**
+   * Check where JSONPaths file for particular shredded type exists:
+   * in cache, in custom `s3.buckets.jsonpath_assets` S3 path or in Snowplow hosted assets bucket
+   * and return full JSONPaths S3 path
+   *
+   * @param snowplowAws Snowplow AWS configuration
+   * @param shreddedType some shredded type (self-describing event or context)
+   * @return full valid s3 path (with `s3://` prefix)
+   */
+  def discoverJsonPath(snowplowAws: SnowplowAws, shreddedType: ShreddedType): Either[DiscoveryError, String] = {
     val filename = s"""${toSnakeCase(shreddedType.name)}_${shreddedType.model}.json"""
     val key = s"${shreddedType.vendor}/$filename"
 
     cache.get(key) match {
-      case Some(jsonPath) =>
-        Right(jsonPath)
+      case Some(jsonPath) => Right(jsonPath)
       case None =>
-        snowplowAws.s3.buckets.jsonpathAssets match {
+        val result = snowplowAws.s3.buckets.jsonpathAssets match {
           case Some(assets) =>
             val path = S3Bucket.append(assets, shreddedType.vendor)
-            if (S3.fileExists(snowplowAws, path, filename))
-              Right(path + filename)
-            else
-              getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
-          case None =>
-            getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
+            if (S3.fileExists(snowplowAws, path, filename)) Right(path + filename)
+            else getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
+          case None => getSnowplowJsonPath(snowplowAws, shreddedType.vendor, filename)
         }
+
+        // Cache successful results
+        result match {
+          case Right(path) => cache.put(key, path)
+          case _ => ()
+        }
+
+        result
     }
   }
 
-  def getSnowplowJsonPath(snowplowAws: SnowplowAws, vendor: String, filename: String): Either[String, String] = {
+  /**
+   * Build valid table name for some shredded type
+   *
+   * @param shreddedType shredded type for self-describing event or context
+   * @param databaseSchema database schema
+   * @return valid table name
+   */
+  def getTable(shreddedType: ShreddedType, databaseSchema: String): String =
+    s"${toSnakeCase(shreddedType.vendor)}_${toSnakeCase(shreddedType.name)}_${shreddedType.model}"
+
+  /**
+   * Check that JSONPaths file exists in Snowplow hosted assets bucket
+   *
+   * @param snowplowAws Snowplow AWS configuration
+   * @param vendor self-describing's type vendor
+   * @param filename JSONPaths filename (without prefixes)
+   * @return full S3 key if file exists, discovery error otherwise
+   */
+  def getSnowplowJsonPath(snowplowAws: SnowplowAws, vendor: String, filename: String): Either[DiscoveryError, String] = {
     val hostedAssetsBucket = getHostedAssetsBucket(snowplowAws.s3.region)
     val path = S3Bucket.append(hostedAssetsBucket, s"$JsonpathsPath$vendor")
     if (S3.fileExists(snowplowAws, path, filename)) {
       Right(path + filename)
     } else {
-      Left(s"JSONPath file [$filename] not found at path [$path]")
+      Left(DiscoveryError(s"JSONPath file [$filename] not found at path [$path]"))
     }
   }
 
-  def getJsonPath(bucket: String, path: String): Either[String, String] =
-    ???
-
-  def getFile(bucket: S3Bucket, filename: String): String = {
-
-    ???
-  }
-
+  /**
+   * Get Snowplow hosted assets S3 bucket for specific region
+   *
+   * @param region valid AWS region
+   * @return AWS S3 path such as `s3://snowplow-hosted-assets-us-west-2/`
+   */
   def getHostedAssetsBucket(region: String): S3Bucket = {
     val suffix = if (region == "eu-west-1") "" else s"-$region"
     S3Bucket.unsafeCoerce(s"$SnowplowHostedAssetsRoot$suffix")
   }
-
-  def fileExists(snowplowAws: SnowplowAws, path: String): Boolean = {
-
-    val s3 = S3.getClient(snowplowAws)
-    ???
-
-  }
-
-  def getTable(shreddedType: ShreddedType, databaseSchema: String): String = ???
-
-  /**
-   * Transforms CamelCase string into snake_case
-   * Also replaces all hyphens with underscores
-   *
-   * @see https://github.com/snowplow/iglu/blob/master/0-common/schema-ddl/src/main/scala/com.snowplowanalytics/iglu.schemaddl/StringUtils.scala
-   *
-   * @param str string to transform
-   * @return the underscored string
-   */
-  def toSnakeCase(str: String): String =
-    str.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
-      .replaceAll("([a-z\\d])([A-Z])", "$1_$2")
-      .replaceAll("-", "_")
-      .replaceAll("""\.""", "_")
-      .toLowerCase
 
   /**
    * Parse S3 key path into shredded type
@@ -145,9 +174,8 @@ object ShreddedType {
    * @param filePath
    * @return
    */
-  // TODO: make sure it accept right filpath
-  def transformPath(bucket: String, filePath: String): Either[String, ShreddedType] = {
-    println(filePath)
+  // TODO: make sure it accept right filepath
+  def transformPath(bucket: String, filePath: String): Either[DiscoveryError, ShreddedType] = {
     filePath.split("/").reverse.splitAt(MinShreddedPathLength) match {
       case (reverseSchema, reversePath) =>
         val igluPath = reverseSchema.tail.reverse.mkString("/")
@@ -158,22 +186,8 @@ object ShreddedType {
             val result = ShreddedType(prefix, key.vendor, key.name, key.version.model)
             Right(result)
           case None =>
-            Left(s"Invalid Iglu path [$igluPath]")
+            Left(DiscoveryError(s"Shredded type discovered in invalid Iglu path [$igluPath]"))
         }
-    }
-  }
-
-  /**
-   * Split S3 path into bucket name and filePath
-   *
-   * @param path S3 full path without `s3://` filePath and with trailing slash
-   * @return pair of bucket name and remaining path
-   */
-  private[rdbloader] def splitS3Path(path: S3Bucket): (String, String) = {
-    path.stripPrefix("s3://").split("/").toList match {
-      case head :: Nil => (head, "/")
-      case head :: tail => (head, tail.mkString("/") + "/")
-      case _ => throw new IllegalArgumentException("Empty bucket path was passed")  // Impossible
     }
   }
 
@@ -186,4 +200,41 @@ object ShreddedType {
   def inAtomicEvents(key: String): Boolean =
     key.split("/").contains("atomic-events")
 
+  /**
+   * Predicate to check if S3 key is special file like `$folder$`
+   *
+   * @param key full S3 path
+   * @return true if path contains `atomic-events`
+   */
+  def specialFile(key: String): Boolean =
+    key.contains("$")
+
+  /**
+   * Ordering instance to help build `SortedSet` of transformation results from `List`
+   */
+  private implicit object EitherOrdering extends Ordering[Either[DiscoveryError, ShreddedType]] {
+    def compare(x: Either[DiscoveryError, ShreddedType], y: Either[DiscoveryError, ShreddedType]): Int = {
+      x match {
+        case Left(xe) => y match {
+          case Right(_) => -1
+          case Left(ye) => implicitly[Ordering[String]].compare(xe.message, ye.message)
+        }
+        case Right(xr) => y match {
+          case Left(_) => 1
+          case Right(yr) =>
+            val ordering = implicitly[Ordering[(String, String, String, Int)]]
+            ordering.compare(
+              (xr.prefix, xr.vendor, xr.name, xr.model),
+              (yr.prefix, yr.vendor, yr.name, yr.model)
+            )
+        }
+      }
+    }
+  }
+
+  /**
+   * Helper function with `Ordering` instance in scope
+   */
+  private def toSortedSet(list: List[Either[DiscoveryError, ShreddedType]]): SortedSet[Either[DiscoveryError, ShreddedType]] =
+    list.to[SortedSet]
 }

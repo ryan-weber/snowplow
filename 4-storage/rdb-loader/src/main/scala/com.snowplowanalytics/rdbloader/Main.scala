@@ -15,15 +15,9 @@ package com.snowplowanalytics.rdbloader
 // File
 import java.io.File
 
-import cats.data.Validated.{Invalid, Valid}
-import com.snowplowanalytics.rdbloader.Targets.{PostgresqlConfig, RedshiftConfig}
-import com.snowplowanalytics.rdbloader.loaders.RedshiftLoader
-
 // cats
-import cats.syntax.cartesian._
-import cats.data.{ ValidatedNel, NonEmptyList }
-import cats.syntax.validated._
-import cats.syntax.either._
+import cats.data.{ Validated, ValidatedNel, NonEmptyList }
+import cats.implicits._
 
 // Iglu
 import com.snowplowanalytics.iglu.client.Resolver
@@ -31,8 +25,10 @@ import com.snowplowanalytics.iglu.client.Resolver
 // This project
 import Compat._
 import Utils._
+import Targets.{PostgresqlConfig, RedshiftConfig, StorageTarget}
 import generated.ProjectMetadata
-import Targets.StorageTarget
+import loaders.RedshiftLoader
+
 
 object Main {
 
@@ -105,7 +101,7 @@ object Main {
        |${errors.map(_.message.padTo(3, ' ')).toList.mkString("\n")}""".stripMargin
   }
 
-  val parser = new scopt.OptionParser[CliConfig]("scopt") {
+  val parser = new scopt.OptionParser[CliConfig]("rdb-loader") {
     head("Relational Database Loader", ProjectMetadata.version)
 
     opt[File]('c', "config").required().valueName("<file>").
@@ -133,6 +129,12 @@ object Main {
 
   }
 
+  /**
+   * 
+   * @param config
+   * @param target
+   * @param steps
+   */
   def processTargets(config: Config, target: StorageTarget, steps: Set[Step]) = target match {
     case postgresqlTarget: PostgresqlConfig =>
       val downloadFolder = config.storage.download.folder.getOrElse("") // TODO: get default dir
@@ -145,19 +147,14 @@ object Main {
       sys.exit(1)
   }
 
-  def run(config: AppConfig) = {
-    config.targets
-
-  }
-
   def main(argv: Array[String]): Unit = {
     val value = parser.parse(argv, rawCliConfig).map(transform) match {
-      case Some(Valid(config)) =>
+      case Some(Validated.Valid(config)) =>
         config.targets.foreach { target =>
           println(s"Processing ${target.name}")
           processTargets(config.configYaml, target, config.steps)
         }
-      case Some(Invalid(errors)) =>
+      case Some(Validated.Invalid(errors)) =>
         errors.toList.foreach(println)
         sys.exit(1)
 

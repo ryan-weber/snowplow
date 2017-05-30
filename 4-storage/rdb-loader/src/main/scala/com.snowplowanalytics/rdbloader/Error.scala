@@ -23,7 +23,6 @@ case class DecodingError(decodingFailure: Option[DecodingFailure], textMessage: 
     case _ => "Unknown configuration parse error"
   }
 }
-
 case class ValidationError(processingMessages: ProcessingMessage) extends ConfigError {
   def message: String = processingMessages.toString
 }
@@ -43,4 +42,16 @@ object DecodingError {
   def apply(message: String): DecodingError =
     DecodingError(None, Some(message))
 }
+
+/**
+ * Error representing failure on events (or types, or JSONPaths) discovery
+ * These errors have aggregation semantics (as in `cats.data.Valid`)
+ */
+case class DiscoveryError(message: String)
+
+/**
+ * Error representing failure on database loading (or executing any statements)
+ * These errors have short-circuit semantics (as in `scala.Either`)
+ */
+case class LoadError()
 

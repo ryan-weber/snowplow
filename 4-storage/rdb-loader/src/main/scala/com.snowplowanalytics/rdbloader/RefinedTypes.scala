@@ -77,13 +77,21 @@ object RefinedTypes {
   type AtomicEventsKey = String @@ AtomicEventsKeyTag
 
   object AtomicEventsKey extends tag.Tagger[AtomicEventsKeyTag] {
+
     def stripFilePart(key: AtomicEventsKey): S3Bucket = {
       val string = key.split("atomic-events/").dropRight(1).mkString("atomic-events/")
       S3Bucket.unsafeCoerce(string)
     }
 
-    def parse(s: String): Option[AtomicEventsKey] =
-      Common.atomicPathPattern.findFirstIn(s).map(_.asInstanceOf[AtomicEventsKey])
+    /**
+     * Extract `run=YYYY-MM-dd-HH-mm-ss/atomic-events` part from
+     * `artbitrary/path/run=YYYY-MM-dd-HH-mm-ss/atomic-events/somefile`
+     *
+     * @param s string probably containing run id and atomic events subpath
+     * @return string refined as runid and `atomic-events` subpath
+     */
+    def extractAtomicSubpath(s: String): Option[String] =
+      Common.atomicSubpathPattern.findFirstIn(s)
 
     def unsafeCoerce(s: String) = apply(s)
   }

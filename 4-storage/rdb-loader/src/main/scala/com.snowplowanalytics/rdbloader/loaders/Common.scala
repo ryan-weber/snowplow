@@ -18,8 +18,16 @@ object Common {
 
   val EventsTable = "events"
 
+  val ManifestTable = "manifest"
+
+  def getEventsTable(databaseSchema: String): String =
+    databaseSchema + "." + EventsTable
+
+  def getManifestTable(databaseSchema: String): String =
+    databaseSchema + "." + ManifestTable
+
   //                            year     month      day        hour       minute     second
-  val atomicPathPattern = "(run=[0-9]{4}-[0-1][0-9]-[0-3][0-9]-[0-2][0-9]-[0-6][0-9]-[0-6][0-9]/atomic-events)".r
+  val atomicSubpathPattern = "(run=[0-9]{4}-[0-1][0-9]-[0-3][0-9]-[0-2][0-9]-[0-6][0-9]-[0-6][0-9]/atomic-events)".r
 
   /**
    * Check if key has valid format for atomic-events folder
@@ -28,14 +36,11 @@ object Common {
    * @return true if key contains `run=YYYY-MM-dd-HH-mm-ss/atomic-events` part
    */
   def isAtomicEvent(s3key: String): Boolean =
-    AtomicEventsKey.parse(s3key).isDefined
-
-  def getTable(databaseSchema: String): String =
-    databaseSchema + "." + EventsTable
+    AtomicEventsKey.extractAtomicSubpath(s3key).isDefined
 
   def extractAtomicEventsSubpath(s3key: AtomicEventsKey): String = {
     // .get is safe because AtomicEventsKey proven to have this part
-    atomicPathPattern.findFirstIn(s3key).get
+    atomicSubpathPattern.findFirstIn(s3key).get
   }
 
 }

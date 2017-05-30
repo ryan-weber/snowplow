@@ -34,6 +34,35 @@ import io.circe.{ HCursor, DecodingFailure, Json, Decoder, ParsingFailure }
 
 object Utils {
 
+  /**
+   * Remove all occurrences of access key id and secret access key from message
+   * Helps to avoid publishing credentials on insecure channels
+   *
+   * @param message original message that may contain credentials
+   * @param stopWords list of secret words (such as passwords) that should be sanitized
+   * @return string with hidden keys
+   */
+  def sanitize(message: String, stopWords: List[String]): String =
+    stopWords.foldLeft(message) { (result, secret) =>
+      result.replaceAll(secret, "x" * secret.length)
+    }
+
+  /**
+   * Transforms CamelCase string into snake_case
+   * Also replaces all hyphens with underscores
+   *
+   * @see https://github.com/snowplow/iglu/blob/master/0-common/schema-ddl/src/main/scala/com.snowplowanalytics/iglu.schemaddl/StringUtils.scala
+   * @param str string to transform
+   * @return the underscored string
+   */
+  def toSnakeCase(str: String): String =
+    str.replaceAll("([A-Z]+)([A-Z][a-z])", "$1_$2")
+      .replaceAll("([a-z\\d])([A-Z])", "$1_$2")
+      .replaceAll("-", "_")
+      .replaceAll("""\.""", "_")
+      .toLowerCase
+
+
   private val m = ru.runtimeMirror(getClass.getClassLoader)
 
   /**

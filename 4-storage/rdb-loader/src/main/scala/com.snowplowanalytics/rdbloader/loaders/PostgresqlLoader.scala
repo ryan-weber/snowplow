@@ -85,7 +85,7 @@ object PostgresqlLoader {
     val statements = List(steps.find(_ == Vacuum), steps.find(_ == Analyze)).flatten.map(_.asString.toUpperCase)
     statements match {
       case Nil => None
-      case steps => Some(SqlString.unsafeCoerce(s"${steps.mkString(" ")} ${Common.getTable(target.schema)};"))
+      case steps => Some(SqlString.unsafeCoerce(s"${steps.mkString(" ")} ${Common.getEventsTable(target.schema)};"))
     }
   }
 
@@ -142,7 +142,7 @@ object PostgresqlLoader {
   }
 
   def copyViaStdin(target: PostgresqlConfig, files: List[Path]): Either[PostgresLoadError, Long] = {
-    val eventsTable = Common.getTable(target.schema)
+    val eventsTable = Common.getEventsTable(target.schema)
     val copyStatement = s"COPY $eventsTable FROM STDIN WITH CSV ESCAPE E'$EscapeChar' QUOTE E'$QuoteChar' DELIMITER '$EventFieldSeparator' NULL '$NullString'"
 
     val conn = getConnection(target)
