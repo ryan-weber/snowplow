@@ -63,6 +63,7 @@ object Semver {
     def partialCompare(x: Option[Prerelease], y: Option[Prerelease]): Double = (x, y) match {
       case (Some(_), None) => -1
       case (None, Some(_)) => 1
+      case (None, None) => 0
       case (Some(Milestone(xm)), Some(Milestone(ym))) =>
         xm.partialCompare(ym)
       case (Some(ReleaseCandidate(xrc)), Some(ReleaseCandidate(yrc))) =>

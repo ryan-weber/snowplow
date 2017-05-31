@@ -68,6 +68,8 @@ object RefinedTypes {
     def unsafeCoerce(s: String) = apply(s)
   }
 
+
+
   sealed trait AtomicEventsKeyTag
 
   /**
@@ -92,6 +94,20 @@ object RefinedTypes {
      */
     def extractAtomicSubpath(s: String): Option[String] =
       Common.atomicSubpathPattern.findFirstIn(s)
+
+    def unsafeCoerce(s: String) = apply(s)
+  }
+
+  sealed trait S3KeyTag
+
+  type S3Key = String @@ S3KeyTag
+
+  object S3Key extends tag.Tagger[S3KeyTag] {
+
+    def stripFilePart(key: S3Key): S3Bucket = {
+      val string = key.split("/").dropRight(1).mkString("/")
+      S3Bucket.unsafeCoerce(string)
+    }
 
     def unsafeCoerce(s: String) = apply(s)
   }

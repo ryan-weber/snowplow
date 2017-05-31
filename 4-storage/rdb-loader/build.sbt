@@ -43,7 +43,7 @@ lazy val root = project.in(file("."))
       Dependencies.s3,
 
       Dependencies.specs2,
-      Dependencies.scalazSpecs2,
+      Dependencies.specs2ScalaCheck,
       Dependencies.scalaCheck
     )
   )

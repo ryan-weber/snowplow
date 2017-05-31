@@ -19,7 +19,6 @@ import Keys._
 import sbtassembly._
 import sbtassembly.AssemblyKeys._
 
-
 /**
  * Common settings-patterns for Snowplow apps and libraries.
  * To enable any of these you need to explicitly add Settings value to build.sbt

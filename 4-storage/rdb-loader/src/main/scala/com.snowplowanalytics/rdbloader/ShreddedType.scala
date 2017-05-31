@@ -23,7 +23,7 @@ import com.snowplowanalytics.iglu.core.SchemaKey
 
 // This project
 import Utils.toSnakeCase
-import RefinedTypes.S3Bucket
+import RefinedTypes.{ S3Bucket, S3Key }
 import Config.SnowplowAws
 
 /**
@@ -59,6 +59,9 @@ object ShreddedType {
    */
   val JsonpathsPath = "/4-storage/redshift-storage/jsonpaths/"
 
+  /**
+   * Regex to extract `SchemaKey` from `shredded/good`
+   */
   val ShreddedSubpathPattern =
     ("""vendor=(?<vendor>[a-zA-Z0-9-_.]+)""" +
      """/name=(?<name>[a-zA-Z0-9-_]+)""" +
@@ -70,6 +73,11 @@ object ShreddedType {
    */
   private val MinShreddedPathLength = 5
 
+  /**
+   * Successfuly fetched JSONPaths
+   * Key: "vendor/filename_1.json";
+   * Value: "s3://my-jsonpaths/redshift/vendor/filename_1.json"
+   */
   private val cache = collection.mutable.HashMap.empty[String, String]
 
   /**
@@ -82,23 +90,21 @@ object ShreddedType {
    */
   def discoverShreddedTypes(aws: SnowplowAws, shredJob: Semver): SortedSet[Either[DiscoveryError, ShreddedType]] = {
     val s3 = S3.getClient(aws)
-    val (bucket, prefix) = S3.splitS3Path(aws.s3.buckets.shredded.good)
-    val types = S3.listS3(s3, bucket, prefix)
-    transformPaths(types, bucket, shredJob)
+    val types = S3.listS3(s3, aws.s3.buckets.shredded.good)
+    transformPaths(types, shredJob)
   }
 
   /**
    * IO-free function to filter, transform and group shredded types fetched with `listS3`
    *
    * @param paths list of all found S3 keys
-   * @param bucket S3 bucket name (without `s3://` prefix)
    * @param shredJob version of shred job to decide what path format we're discovering
    * @return sorted set (only unique values) of discovered shredded type results,
    *         where result can be either shredded type, or discovery error
    */
-  def transformPaths(paths: List[String], bucket: String, shredJob: Semver): SortedSet[Either[DiscoveryError, ShreddedType]] = {
-    val transform: String => Either[DiscoveryError, ShreddedType] =
-      transformPath(bucket, _, shredJob)
+  def transformPaths(paths: List[S3Key], shredJob: Semver): SortedSet[Either[DiscoveryError, ShreddedType]] = {
+    val transform: S3Key => Either[DiscoveryError, ShreddedType] =
+      transformPath(_, shredJob)
     val list: List[Either[DiscoveryError, ShreddedType]] =
       paths.filterNot(inAtomicEvents).filterNot(specialFile).map(transform)
     toSortedSet(list)
@@ -180,25 +186,20 @@ object ShreddedType {
   /**
    * Parse S3 key path into shredded type
    *
-   * @param bucket
    * @param filePath
    * @param shredJob version of shred job to decide what path format should be present
    * @return
    */
-  // TODO: make sure it accept right filepath
-  def transformPath(bucket: String, filePath: String, shredJob: Semver): Either[DiscoveryError, ShreddedType] = {
-    filePath.split("/").reverse.splitAt(MinShreddedPathLength) match {
-      case (reverseSchema, reversePath) =>
-        val subpath = reverseSchema.tail.reverse.mkString("/")
-        extractSchemaKey(subpath, shredJob) match {
-          case Some(key) =>
-            val rootPath = reversePath.reverse.mkString("/")
-            val prefix = S3Bucket.unsafeCoerce("s3://" + bucket + "/" + rootPath)
-            val result = ShreddedType(prefix, key.vendor, key.name, key.version.model)
-            Right(result)
-          case None =>
-            Left(DiscoveryError(s"Shredded type discovered in invalid subpath [s3://$bucket/$filePath]"))
-        }
+  def transformPath(key: S3Key, shredJob: Semver): Either[DiscoveryError, ShreddedType] = {
+    val (bucket, path) = S3.splitS3Key(key)
+    val (subpath, shredpath) = splitFilpath(path)
+    extractSchemaKey(shredpath, shredJob) match {
+      case Some(key) =>
+        val prefix = S3Bucket.unsafeCoerce("s3://" + bucket + "/" + subpath)
+        val result = ShreddedType(prefix, key.vendor, key.name, key.version.model)
+        Right(result)
+      case None =>
+        Left(DiscoveryError(s"Shredded type discovered in invalid path [$key]"))
     }
   }
 
@@ -238,6 +239,24 @@ object ShreddedType {
    */
   def specialFile(key: String): Boolean =
     key.contains("$")
+
+  /**
+   * Split S3 filepath (without bucket name) into subpath and shreddedpath
+   * Works both for legacy and modern format. Omits file
+   *
+   * `path/to/shredded/good/run=2017-05-02-12-30-00/vendor=com.acme/name=event/format=jsonschema/version=1-0-0/part-0001`
+   * ->
+   * `(path/to/shredded/good/run=2017-05-02-12-30-00/, vendor=com.acme/name=event/format=jsonschema/version=1-0-0)`
+   *
+   * @param path S3 key without bucket name
+   * @return pair of subpath and shredpath
+   */
+  private def splitFilpath(path: String): (String, String) = {
+    path.split("/").reverse.splitAt(MinShreddedPathLength) match {
+      case (reverseSchema, reversePath) =>
+        (reversePath.reverse.mkString("/"), reverseSchema.tail.reverse.mkString("/"))
+    }
+  }
 
   /**
    * Ordering instance to help build `SortedSet` of transformation results from `List`

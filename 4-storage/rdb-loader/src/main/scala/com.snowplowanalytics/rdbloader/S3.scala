@@ -12,27 +12,78 @@
  */
 package com.snowplowanalytics.rdbloader
 
+// Scala
 import scala.collection.convert.wrapAsScala._
 import scala.collection.mutable.ListBuffer
 
+// AWS Java SDK
 import com.amazonaws.AmazonServiceException
 import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
 import com.amazonaws.services.s3.model.{ListObjectsV2Request, ListObjectsV2Result, GetObjectMetadataRequest}
 
+// This project
 import RefinedTypes._
 import Config.SnowplowAws
 
+trait S3 {
+  def fileExists(path: S3Bucket, file: String): Boolean
+  def findAtomicEventsKey(): Option[S3Bucket]
+  def listS3(s3folder: S3Bucket): List[S3Key]
+}
+
 object S3 {
 
-  def getClient(awsConfig: SnowplowAws): AmazonS3 = {
+  class AwsS3Client(client: AmazonS3) extends S3 {
+    /**
+     * Check if some `file` exists in S3 `path`
+     *
+     * @param path valid S3 path (with trailing slash)
+     * @param file file name
+     * @return true if file exists, false if file doesn't exist or not available
+     */
+    def fileExists(path: S3Bucket, file: String): Boolean = {
+      val (bucket, prefix) = splitS3Path(path)
+      val request = new GetObjectMetadataRequest(bucket, prefix)
+      try {
+        client.getObjectMetadata(request)
+        true
+      } catch {
+        case _: AmazonServiceException => false
+      }
+    }
+
+    def findAtomicEventsKey(aws: SnowplowAws): Option[S3Bucket] = {
+      val (bucket, prefix) = splitS3Path(aws.s3.buckets.shredded.good)
+
+      var result: ListObjectsV2Result = null
+      val req  = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix).withMaxKeys(10)
+      var end: Option[String] = None
+
+      do {
+        result = client.listObjectsV2(req)
+        val objects = result.getObjectSummaries.map(_.getKey)
+        end = objects.map(AtomicEventsKey.extractAtomicSubpath).collectFirst {
+          case Some(subpath) => subpath   // run=YYYY-MM-dd-HH-mm-ss/atomic-events
+        }
+      } while (result.isTruncated && end.nonEmpty)
+
+      end.map { subpath => S3Bucket.unsafeCoerce("s3://" + bucket + "/" + prefix + subpath + "/") }
+    }
+
+
+  }
+
+  def getClient(awsConfig: SnowplowAws): S3 = {
     val awsCredentials = new BasicAWSCredentials(awsConfig.accessKeyId, awsConfig.secretAccessKey)
 
-    AmazonS3ClientBuilder
+    val client = AmazonS3ClientBuilder
       .standard()
       .withRegion(awsConfig.s3.region)
       .withCredentials(new AWSStaticCredentialsProvider(awsCredentials))
       .build()
+
+    new AwsS3Client(client)
   }
 
 
@@ -42,7 +93,11 @@ object S3 {
    * @param path S3 full path without `s3://` filePath and with trailing slash
    * @return pair of bucket name and remaining path ("some-bucket", "some/prefix/")
    */
-  private[rdbloader] def splitS3Path(path: S3Bucket): (String, String) = {
+  private[rdbloader] def splitS3Path(path: S3Bucket): (String, String) = splitS3Path(path)
+
+  private[rdbloader] def splitS3Key(key: S3Key): (String, String) = splitS3(key)
+
+  private def splitS3(path: String): (String, String) = {
     path.stripPrefix("s3://").split("/").toList match {
       case head :: Nil => (head, "/")
       case head :: tail => (head, tail.mkString("/") + "/")
@@ -60,65 +115,22 @@ object S3 {
    */
   def fileExists(snowplowAws: SnowplowAws, path: S3Bucket, file: String): Boolean = {
     val s3 = getClient(snowplowAws)
-    val (bucket, prefix) = splitS3Path(path)
-    val request = new GetObjectMetadataRequest(bucket, prefix)
-    try {
-      s3.getObjectMetadata(request)
-      true
-    } catch {
-      case _: AmazonServiceException => false
-    }
+    s3.fileExists(path, file)
   }
 
   /**
-   * Helper method to get **all** keys from bucket.
-   * Unlike usual `s3.listObjects` it won't truncate response after 1000 items
-   * TODO: check if we really can reach 1000 items - we surely can
+   * Find first occurrence of key matching atomic events pattern
+   * in `shredded.good` bucket. Strips filename part
    *
-   * @param s3
-   * @param bucket
-   * @param prefix
-   * @return
-   */
-  def listS3(s3: AmazonS3, bucket: String, prefix: String): List[String] = {
-    var result: ListObjectsV2Result = null
-    val buffer = ListBuffer.empty[String]
-    val req = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix)
-
-    do {
-      result = s3.listObjectsV2(req)
-      val objects = result.getObjectSummaries.map(_.getKey)
-      buffer.appendAll(objects)
-    } while (result.isTruncated)
-    buffer.toList
-  }
-
-  /**
-   * Find
-   *
-   * @param aws
-   * @return
+   * @param aws Snowplow AWS configuration
+   * @return first
    */
   def findAtomicEventsKey(aws: SnowplowAws): Option[S3Bucket] = {
     val s3 = S3.getClient(aws)
-    val (bucket, prefix) = splitS3Path(aws.s3.buckets.shredded.good)
-
-    var result: ListObjectsV2Result = null
-    val req  = new ListObjectsV2Request().withBucketName(bucket).withPrefix(prefix).withMaxKeys(10)
-    var end: Option[String] = None
-
-    do {
-      result = s3.listObjectsV2(req)
-      val objects = result.getObjectSummaries.map(_.getKey)
-      end = objects.map(AtomicEventsKey.extractAtomicSubpath).collectFirst {
-        case Some(subpath) => subpath   // run=YYYY-MM-dd-HH-mm-ss/atomic
-      }
-    } while (result.isTruncated && end.nonEmpty)
-
-    end.map { subpath => S3Bucket.unsafeCoerce("s3://" + bucket + "/" + prefix + subpath + "/") }
+    s3.findAtomicEventsKey()
   }
 
-  def listS3(s3: AmazonS3, s3folder: S3Bucket): List[String] = {
+  def listS3(s3: AmazonS3, s3folder: S3Bucket): List[S3Key] = {
     val (bucket, prefix) = splitS3Path(s3folder)
 
     var result: ListObjectsV2Result = null
@@ -130,8 +142,6 @@ object S3 {
       val objects = result.getObjectSummaries.map(_.getKey)
       buffer.appendAll(objects)
     } while (result.isTruncated)
-    buffer.toList
+    buffer.map(key => S3Key.unsafeCoerce(s"s3://$bucket/$key")).toList
   }
-
-
 }
