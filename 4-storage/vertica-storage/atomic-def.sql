@@ -185,4 +185,7 @@ ORDER BY
 	app_id, event_id
 SEGMENTED BY HASH(event_id) ALL NODES KSAFE 1;
 
+-- add primary key
+alter table atomic.events add constraint events_pk primary key (event_id);
+
 COMMENT ON TABLE atomic.events IS '0.8.0'
